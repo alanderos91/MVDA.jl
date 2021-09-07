@@ -1,0 +1,13 @@
+name = "Code"
+uuid = "b3f231df-6a57-4c00-8263-a4d857d0313b"
+authors = ["Alfonso Landeros <alanderos@ucla.edu> and contributors"]
+version = "0.1.0"
+
+[compat]
+julia = "1.6"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
