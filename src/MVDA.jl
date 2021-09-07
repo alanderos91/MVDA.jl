@@ -16,7 +16,7 @@ const DATA_DIR = joinpath(@__DIR__, "data")
 """
 `list_datasets()`
 
-List available datasets in SparseSVM.
+List available datasets in MVDA.
 """
 list_datasets() = map(x -> splitext(x)[1], readdir(DATA_DIR))
 
@@ -55,12 +55,24 @@ function dataset(str)
     return df
 end
 
+"""
+Process the dataset located at the given `path`.
+
+This is an extra step to give fine-grain control in generating files with DataDeps.jl.
+"""
 function process_dataset(path::AbstractString; header=false, missingstrings="", kwargs...)
     input_df = CSV.read(path, DataFrame, header=header, missingstrings=missingstrings)
     process_dataset(input_df; kwargs...)
     rm(path)
 end
 
+"""
+Final step in processing the given dataset `input_df`.
+
+This standardizes cached files that live in ~/.julia/datadeps so that labels/targets appear in first column
+followed by features in the remaining columns.
+We also check for uniqueness in features.
+"""
 function process_dataset(input_df::DataFrame;
     target_index=-1,
     feature_indices=1:0,
