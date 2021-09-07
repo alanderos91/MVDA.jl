@@ -27,7 +27,7 @@ register(DataDep(
         seed        = 1903
 
         # Simulate the data.
-        rng = MersenneTwister(seed)
+        rng = StableRNG(seed)
         target, x, y = Vector{Char}(undef, N), zeros(N), zeros(N)
         for i in 1:N
         if i ≤ max_A

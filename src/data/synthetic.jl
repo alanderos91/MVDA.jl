@@ -21,7 +21,7 @@ register(DataDep(
     "514ef72019b85634859baf459b38f37295d5fcc84d06be7d8e4a71a99a74cbdf";
     fetch_method=function(unused, localdir)
         #
-        rng = MersenneTwister(2000)
+        rng = StableRNG(2000)
         (m, n) = (10^3, 500)
 
         # covariance matrix
