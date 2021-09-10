@@ -134,7 +134,7 @@ accuracy = sum( MVDA.classify(problem, X) .== targets ) / length(targets) * 100;
 println("Training accuracy is ", accuracy, "%.") # should be around 90-97%
 ```
 
-### Cross-Validation
+## Cross-Validation
 
 The function `cv_MVDA` can be used to tune `ϵ` and `sparsity` via $k$-fold cross-validation.
 It supports the same optional arguments as `fit_MVDA`.
@@ -190,4 +190,12 @@ scatter!((result.epsilon[j], result.sparsity[i]*100),
     markercolor=:white,
     grid=false
 )
+```
+
+## Running package tests
+
+In Julia, with the `MVDA` environment activated, enter package mode and then run the `test` command:
+
+```julia
+(MVDA) pkg> test # everything should pass!
 ```
