@@ -15,7 +15,7 @@ register(DataDep(
     "https://archive.ics.uci.edu/ml/machine-learning-databases/letter-recognition/letter-recognition.data",
     "2b89f3602cf768d3c8355267d2f13f2417809e101fc2b5ceee10db19a60de6e2",
     post_fetch_method = (path -> begin
-        SparseSVM.process_dataset(path,
+        MVDA.process_dataset(path,
             header=false,
             target_index=1,
             feature_indices=2:17,

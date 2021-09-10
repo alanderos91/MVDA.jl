@@ -40,7 +40,7 @@ register(DataDep(
         )
         
         # Process the data as usual.
-        SparseSVM.process_dataset(df,
+        MVDA.process_dataset(df,
             target_index=ncol(df),
             feature_indices=1:ncol(df)-1,
             ext=".csv",

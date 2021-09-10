@@ -16,7 +16,7 @@ register(DataDep(
     "https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/breast-cancer-wisconsin.data",
     "402c585309c399237740f635ef9919dc512cca12cbeb20de5e563a4593f22b64",
     post_fetch_method = (path -> begin
-        SparseSVM.process_dataset(path,
+        MVDA.process_dataset(path,
             missingstrings=["?"],
             header=false,
             target_index=11,

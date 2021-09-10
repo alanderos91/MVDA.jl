@@ -28,7 +28,7 @@ register(DataDep(
         tmpdf = innerjoin(labels, data, on=:Column1)
 
         # Process the file as usual.
-        SparseSVM.process_dataset(tmpdf,
+        MVDA.process_dataset(tmpdf,
             target_index=2,
             feature_indices=3:ncol(tmpdf),
             ext=".csv.gz"
