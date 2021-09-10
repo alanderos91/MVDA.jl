@@ -46,6 +46,7 @@ function __mm_update_sparsity__(::MMSVD, problem, ϵ, ρ, k, extras)
     # Update scaling factors on distance penalty, Dⱼⱼ = 1 / √( (c-1) * (p-kⱼ+1) )
     @inbounds @simd for j in eachindex(D.diag)
         D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
+        # D.diag[j] = 1 / sqrt( (c-1) )
     end
 
     return nothing
@@ -61,6 +62,7 @@ function __mm_update_rho__(::MMSVD, problem, ϵ, ρ, k, extras)
     @inbounds for j in eachindex(Ψ)
         Ψⱼ = Ψ[j]
         b² = ρ / ( (c-1) * (p-k[j]+1) )
+        # b² = ρ / ( (c-1) )
         @inbounds @simd for i in eachindex(Ψⱼ.diag)
             sᵢ² = s[i]^2
             Ψⱼ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
@@ -105,7 +107,7 @@ function __mm_iterate__(::MMSVD, problem, ϵ, ρ, k, extras)
         lmul!(Ψⱼ, buffer)
         mul!(βⱼ, V, buffer)
         axpy!(one(T), pⱼ, βⱼ)
-        @assert βⱼ ≈ pⱼ + V * Ψⱼ * (inv(Σ)*U'*zⱼ - V'*pⱼ)
+        # @assert βⱼ ≈ pⱼ + V * Ψⱼ * (inv(Σ)*U'*zⱼ - V'*pⱼ)
     end
 
     return nothing

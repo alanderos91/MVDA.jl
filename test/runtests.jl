@@ -58,7 +58,7 @@ end
     # Initialize coefficients and parameters; do we need a stable RNG?
     rng = StableRNG(1903)
     randn!(rng, B)
-    ϵ = 1e-3
+    ϵ = 0.5 * sqrt(2*c/(c-1))
     ρ = 4.7
     k = [p for _ in 1:c-1]
 
@@ -131,52 +131,39 @@ end
     end
 end
 
-# @testset "Descent Property" begin
-#     problem_size = (
-#         (500, 600, 50, 10,), # underdetermined, n < p
-#         (600, 500, 50, 10,), # overdetermined, n > p
-#         (500, 50, 600, 10,),
-#     )
+@testset "Descent Property" begin
+    ϵ = 0.5 * sqrt(2*c/(c-1))
+    ρ = 1.234
     
-#     for (n,p,d,k) in problem_size
-#         X, Z = randn(n, p), randn(p, d)
-#         X .= (X .- mean(X, dims=1)) ./ std(X, dims=1)
-#         Z .= (Z .- mean(Z, dims=1)) ./ std(Z, dims=1)
-    
-#         α0 = zeros(d)
-#         α0[1:k] = rand((-1,1), k) * 10 + randn(k)
-#         β0 = Z*α0 + randn(p)
-#         γ0 = β0 - Z*α0
-#         y = X*β0
-    
-#         problem = ProxDistProblem(y, X, Z)
-#         λ = 1e1
-#         ρ = 1.234
-#         s = 0.0
-    
-#         @testset "$(algorithm)" for algorithm in (SD(), MMSVD(), MMBCD(), MMCD(),)
-#             function test_descent_property(threshold)
-#                 copyto!(problem.coeff.int, γ0)
-#                 copyto!(problem.coeff.ext, α0)
-    
-#                 _, _, _, obj0A, _, _ = hreg(algorithm, problem, λ, ρ, s, ninner=0, gtol=1e-6, nesterov_threshold=threshold)
-#                 _, _, _, obj0B, _, _ = hreg(algorithm, problem, λ, ρ, s, ninner=0, gtol=1e-6, nesterov_threshold=threshold)
-#                 _, _, _, obj1, _, _ = hreg(algorithm, problem, λ, ρ, s, ninner=1, gtol=1e-6, nesterov_threshold=threshold)
-#                 _, _, _, obj2, _, _ = hreg(algorithm, problem, λ, ρ, s, ninner=1, gtol=1e-6, nesterov_threshold=threshold)
-#                 _, _, _, obj100, _, _ = hreg(algorithm, problem, λ, ρ, s, ninner=98, gtol=1e-6, nesterov_threshold=threshold)
-    
-#                 @test obj0A == obj0B # no iterations
-#                 @test obj0A > obj1   # decrease after 1 iteration
-#                 @test obj1 > obj2    # decrease after 1 iteration
-#                 @test obj0A > obj100 # decrease after 100 iterations
+    @testset "$(algorithm)" for algorithm in (MMSVD(),)
+        function test_descent_property(s, threshold)
+            B = prob.coeff.all
+            rng = StableRNG(1903)
+            randn!(rng, B)
 
-#                 @test all(!isnan, problem.coeff.all)
-#             end
-#             # w/o Nesterov acceleration
-#             test_descent_property(100)
-    
-#             # w/ Nesterov acceleration
-#             test_descent_property(10)
-#         end
-#     end
-# end
+            _, _, obj0A, _, _ = fit_MVDA(algorithm, prob, ϵ, ρ, s, ninner=0, gtol=1e-6, nesterov_threshold=threshold)
+            _, _, obj0B, _, _ = fit_MVDA(algorithm, prob, ϵ, ρ, s, ninner=0, gtol=1e-6, nesterov_threshold=threshold)
+            _, _, obj1, _, _ = fit_MVDA(algorithm, prob, ϵ, ρ, s, ninner=1, gtol=1e-6, nesterov_threshold=threshold)
+            _, _, obj2, _, _ = fit_MVDA(algorithm, prob, ϵ, ρ, s, ninner=1, gtol=1e-6, nesterov_threshold=threshold)
+            _, _, obj100, _, _ = fit_MVDA(algorithm, prob, ϵ, ρ, s, ninner=98, gtol=1e-6, nesterov_threshold=threshold)
+            _, _, objfinal, _, gradsq = fit_MVDA(algorithm, prob, ϵ, ρ, s, ninner=10^4, gtol=1e-8, nesterov_threshold=threshold)
+
+            @test obj0A == obj0B # no iterations
+            @test obj0A > obj1   # decrease after 1 iteration
+            @test obj1 > obj2    # decrease after 1 iteration
+            @test obj0A > obj100 # decrease after 100 iterations
+            @test obj0A > objfinal # decrease at final estimate
+            @test gradsq < 1e-8 # convergence
+            @test all(!isnan, B) # no instability
+        end
+        
+        # check for different model sizes
+        for s in (0.0, 0.25, 0.5, 0.75)
+            # w/o Nesterov acceleration
+            test_descent_property(s, 100)
+
+            # w/ Nesterov acceleration
+            test_descent_property(s, 10)
+        end
+    end
+end
