@@ -135,7 +135,7 @@ end
     ϵ = 0.5 * sqrt(2*c/(c-1))
     ρ = 1.234
     
-    @testset "$(algorithm)" for algorithm in (MMSVD(),)
+    @testset "$(algorithm)" for algorithm in (MMSVD(), SD(),)
         function test_descent_property(s, threshold)
             B = prob.coeff.all
             rng = StableRNG(1903)

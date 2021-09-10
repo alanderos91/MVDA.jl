@@ -32,6 +32,7 @@ function __allocate_res__(T, n, p, c)
     main = (
         all=arr_main,
         dim=[view(arr_main, :, j) for j in 1:c-1],
+        sample=[view(arr_main, i, :) for i in 1:n],
     )
 
     # views into distance residuals, P - B
@@ -44,6 +45,7 @@ function __allocate_res__(T, n, p, c)
     weighted = (
         all=arr_weighted,
         dim=[view(arr_weighted, :, j) for j in 1:c-1],
+        sample=[view(arr_weighted, i, :) for i in 1:n],
     )
 
     return (main=main, dist=dist, weighted=weighted,)

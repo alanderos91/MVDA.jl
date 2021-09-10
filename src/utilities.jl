@@ -23,8 +23,8 @@ function __evaluate_residuals__(problem, ϵ, extras, need_main::Bool, need_dist:
         # weighted residuals, W^1/2 * (Y - X*B)
         for i in axes(Y, 1)
             yᵢ = view(Y, i, :)
-            rᵢ = view(res.main.all, i, :)
-            wrᵢ = view(res.weighted.all, i, :)
+            rᵢ = res.main.sample[i]
+            wrᵢ = res.weighted.sample[i]
             normrᵢ = norm(rᵢ) / a
             wᵢ = ifelse(normrᵢ ≤ ϵ, zero(T), (normrᵢ-ϵ)/normrᵢ)
             @. wrᵢ = wᵢ * rᵢ
