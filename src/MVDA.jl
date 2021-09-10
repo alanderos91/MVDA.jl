@@ -114,7 +114,7 @@ __mm_iterate__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_imple
 __mm_update_sparsity__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Update sparsity step")
 __mm_update_rho__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Update ρ step")
 
-# include(joinpath("algorithms", "SD.jl"))
+include(joinpath("algorithms", "SD.jl"))
 include(joinpath("algorithms", "MMSVD.jl"))
 
 const DEFAULT_ANNEALING = geometric_progression
@@ -433,6 +433,6 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
 end
 
 export IterationResult, SubproblemResult
-export MVDAProblem, MMSVD, fit_MVDA, fit_MVDA!, cv_MVDA
+export MVDAProblem, SD, MMSVD, fit_MVDA, fit_MVDA!, cv_MVDA
 
 end
