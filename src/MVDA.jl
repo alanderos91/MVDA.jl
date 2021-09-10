@@ -2,7 +2,10 @@ module MVDA
 
 using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
+using Parameters, Printf, MLDataUtils, ProgressMeter
 using LinearAlgebra, Random, Statistics, StableRNGs
+
+import Base: show, iterate
 
 ##### DATA #####
 
@@ -97,5 +100,339 @@ function process_dataset(input_df::DataFrame;
         error("Unknown file extension option '$(ext)'")
     end
 end
+
+##### IMPLEMENTATION #####
+
+include("utilities.jl")
+include("projections.jl")
+include("problem.jl")
+
+abstract type AbstractMMAlg end
+
+__mm_init__(algorithm::AbstractMMAlg, problem, extras) = not_implemented(algorithm, "Initialization step")
+__mm_iterate__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Iteration step")
+__mm_update_sparsity__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Update sparsity step")
+__mm_update_rho__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Update ρ step")
+
+# include(joinpath("algorithms", "SD.jl"))
+include(joinpath("algorithms", "MMSVD.jl"))
+
+const DEFAULT_ANNEALING = geometric_progression
+const DEFAULT_CALLBACK = __do_nothing_callback__
+const DEFAULT_SCORE_FUNCTION = prediction_error
+
+"""
+```
+fit_MVDA(algorithm, problem, ϵ, s; kwargs...)
+```
+
+Solve optimization problem at sparsity levels `s` and `ϵ`-insensitive pseudodistances.
+Solution is obtained via a proximal distance `algorithm` that gradually anneals parameter estimates
+toward the target sparsity set.
+"""
+function fit_MVDA(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:Real}}; kwargs...)
+    # Initialize any additional data structures.
+    extras = __mm_init__(algorithm, problem, nothing)
+
+    fit_MVDA!(algorithm, problem, ϵ, s, extras, (true,false,); kwargs...)
+end
+
+"""
+```
+fit_MVDA!(algorithm, problem, ϵ, s, [extras], [update_hyperparams]; kwargs...)
+```
+
+Same as `fit_MVDA(algorithm, problem, ϵ, s)`, but with preallocated data structures in `extras`.
+The caller should specify whether to update data structures depending on `s` (default=`true`).
+"""
+function fit_MVDA!(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:Real}}, extras=nothing, update_extras::NTuple{2,Bool}=(true,false,);
+    nouter::Int=100,
+    dtol::Real=1e-6,
+    rtol::Real=1e-6,
+    rho_init::Real=1.0,
+    rho_max::Real=1e8,
+    rhof::Function=DEFAULT_ANNEALING,
+    verbose::Bool=false,
+    cb::Function=DEFAULT_CALLBACK,
+    kwargs...
+    )
+    # Check for missing data structures.
+    if extras isa Nothing
+        error("Detected missing data structures for algorithm $(algorithm).")
+    end
+
+    # Get problem info and extra data structures.
+    @unpack coeff, coeff_prev, proj = problem
+    @unpack apply_projection = extras
+    n, p, c = probdims(problem)
+    
+    # Fix model size(s).
+    if s isa Real
+        k = [sparsity_to_k(s, p) for _ in 1:c-1]
+    else
+        k = sparsity_to_k.(s, p)
+    end
+
+    # Initialize ρ and iteration count.
+    ρ = rho_init
+    iters = 0
+
+    # Update data structures due to hyperparameters.
+    update_extras[1] && __mm_update_sparsity__(algorithm, problem, ϵ, ρ, k, extras)
+    update_extras[2] && __mm_update_rho__(algorithm, problem, ϵ, ρ, k, extras)
+
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    for j in eachindex(proj.dim)
+        copyto!(proj.dim[j], coeff.dim[j])
+        apply_projection(proj.dim[j], k[j])
+    end
+    init_result = __evaluate_objective__(problem, ϵ, ρ, extras)
+    result = SubproblemResult(0, init_result)
+    cb(0, problem, ϵ, ρ, k, result)
+    old = result.distance
+
+    for iter in 1:nouter
+        # Solve minimization problem for fixed rho.
+        verbose && print("\n",iter,"  ρ = ",ρ)
+        result = fit_MVDA!(algorithm, problem, ϵ, ρ, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
+
+        # Update total iteration count.
+        iters += result.iters
+
+        cb(iter, problem, ϵ, ρ, k, result)
+
+        # Check for convergence to constrained solution.
+        dist = result.distance
+        if dist < dtol || abs(dist - old) < rtol * (1 + old)
+            break
+        else
+          old = dist
+        end
+                
+        # Update according to annealing schedule.
+        ρ = rhof(ρ, iter, rho_max)
+    end
+    
+    # Project solution to the constraint set.
+    for j in eachindex(proj.dim)
+        copyto!(proj.dim[j], coeff.dim[j])
+        apply_projection(proj.dim[j], k[j])
+    end
+    loss, obj, dist, gradsq = __evaluate_objective__(problem, ϵ, ρ, extras)
+
+    if verbose
+        print("\n\niters = ", iters)
+        print("\n∑ᵢ max{0, |yᵢ-Bᵀxᵢ|₂-ϵ}² = ", loss)
+        print("\nobjective     = ", obj)
+        print("\ndistance      = ", dist)
+        println("\n|gradient|² = ", gradsq)
+    end
+
+    return SubproblemResult(iters, loss, obj, dist, gradsq)
+end
+
+"""
+```
+fit_MVDA(algorithm, problem, ϵ, ρ, s; kwargs...)
+```
+
+Solve the `ρ`-penalized optimization problem at sparsity level `s`.
+"""
+function fit_MVDA(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,AbstractVector{<:Real}}; kwargs...)
+    # Initialize any additional data structures.
+    extras = __mm_init__(algorithm, problem, nothing)
+
+    fit_MVDA!(algorithm, problem, ϵ, ρ, s, extras, (true,true,); kwargs...)
+end
+
+"""
+```
+fit_MVDA!(algorithm, problem, ϵ, ρ, s, [extras], [update_extras]; kwargs...)
+The caller should specify whether to update data structures depending on
+    - `lambda` or `s` (default=`true`), and
+    - `rho` (default=true).
+```
+
+Same as `fit_MVDA!(algorithm, problem, ϵ, ρ, s)`, but with preallocated data structures in `extras`.
+"""
+function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,AbstractVector{<:Real}}, extras=nothing, update_extras::NTuple{2,Bool}=(true,true);
+    ninner::Int=10^4,
+    gtol::Real=1e-6,
+    nesterov_threshold::Int=10,
+    verbose::Bool=false,
+    cb::Function=DEFAULT_CALLBACK,
+    kwargs...
+    )
+    # Check for missing data structures.
+    if extras isa Nothing
+        error("Detected missing data structures for algorithm $(algorithm).")
+    end
+
+    # Get problem info and extra data structures.
+    @unpack coeff, coeff_prev, proj = problem
+    @unpack apply_projection = extras
+    n, p, c = probdims(problem)
+
+    # Fix model size(s).
+    if s isa Real
+        k = [sparsity_to_k(s, p) for _ in 1:c-1]
+    else
+        k = sparsity_to_k.(s, p)
+    end
+
+    # Update data structures due to hyperparameters.
+    update_extras[1] && __mm_update_sparsity__(algorithm, problem, ϵ, ρ, k, extras)
+    update_extras[2] && __mm_update_rho__(algorithm, problem, ϵ, ρ, k, extras)
+
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    for j in eachindex(proj.dim)
+        copyto!(proj.dim[j], coeff.dim[j])
+        apply_projection(proj.dim[j], k[j])
+    end
+    result = __evaluate_objective__(problem, ϵ, ρ, extras)
+    cb(0, problem, ϵ, ρ, k, result)
+    old = result.objective
+
+    if result.gradient < gtol
+        return SubproblemResult(0, result)
+    end
+
+    # Initialize iteration counts.
+    copyto!(coeff_prev.all, coeff.all)
+    iters = 0
+    nesterov_iter = 1
+
+    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|²")
+    for iter in 1:ninner
+        iters += 1
+
+        # Apply the algorithm map to minimize the quadratic surrogate.
+        __mm_iterate__(algorithm, problem, ϵ, ρ, k, extras)
+
+        # Update loss, objective, distance, and gradient.
+        for j in eachindex(proj.dim)
+            copyto!(proj.dim[j], coeff.dim[j])
+            apply_projection(proj.dim[j], k[j])
+        end
+        result = __evaluate_objective__(problem, ϵ, ρ, extras)
+
+        cb(iter, problem, ϵ, ρ, k, result)
+
+        if verbose
+            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, result.distance, result.gradient)
+        end
+
+        # Assess convergence.
+        obj = result.objective
+        gradsq = result.gradient
+        if gradsq < gtol
+            break
+        elseif iter < ninner
+            needs_reset = iter < nesterov_threshold || obj > old
+            nesterov_iter = __apply_nesterov__!(coeff.all, coeff_prev.all, nesterov_iter, needs_reset)
+            old = obj
+        end
+    end
+
+    return SubproblemResult(iters, result)
+end
+
+"""
+```
+cv_MVDA(algorithm, problem, ϵ_grid, s_grid; kwargs...)
+```
+
+Compute scores for multiple models parameterized by hyperparameters `s` and `ϵ` via K-fold cross-validation.
+
+- `problem` should enter with an initial guess for model parameters (i.e. in `problem.coeff`).
+- `ϵ_grid` should be an increasing sequence of nonnegative values.
+- `s_grid` should be an increasing sequence of sparsity values (dense to sparse) between 0 and 1.
+
+The default scoring function evaluates the loss, `MSE(y, X*β) + λ * MSE(β,Z*α)`, on the training, validation, and test sets.
+"""
+function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
+    nfolds::Int=10,
+    at::Real=0.8,
+    scoref::Function=DEFAULT_SCORE_FUNCTION,
+    cb::Function=DEFAULT_CALLBACK,
+    kwargs...
+    )
+    # Split data into cross-validation set and test set.
+    @unpack Y, X = problem
+    cv_set, test_set = splitobs((Y, X), at=at, obsdim=1)
+
+    # Initialize model object; just used to pass around coefficients.
+    n, p, c = probdims(problem)
+    T = floattype(problem)
+    coeff_copy = deepcopy(problem.coeff)
+    model = MVDAProblem{T}(Y, X, problem.vertex, problem.label2vertex, problem.vertex2label,
+        coeff_copy, problem.coeff_prev,
+        problem.proj, problem.res, problem.grad
+    )
+
+    # Set initial model coefficients.
+    init_coeff = problem.coeff.all
+
+    # Initialize the output.
+    tmp = scoref(model, test_set, test_set, test_set)
+    score = Array{typeof(tmp)}(undef, length(s_grid), length(ϵ_grid), nfolds)
+
+    # Run cross-validation.
+    nvals = length(ϵ_grid) * length(s_grid)
+    progress_bar = Progress(nfolds*nvals, 1, "Running CV w/ $(algorithm)... ")
+
+    for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
+        # Retrieve the training set and validation set.
+        train_set, validation_set = fold
+        train_Y, train_X = train_set
+        train_n = size(train_Y, 1)
+        train_res = __allocate_res__(T, train_n, p, c)
+        
+        # Create a problem object for the training set.
+        train_problem = MVDAProblem{T}(copy(train_Y), copy(train_X),
+            problem.vertex, problem.label2vertex, problem.vertex2label,
+            deepcopy(problem.coeff), deepcopy(problem.coeff_prev),
+            deepcopy(problem.proj), train_res, deepcopy(problem.grad),
+        )
+        extras = __mm_init__(algorithm, train_problem, nothing)
+
+        for (j, ϵ) in enumerate(ϵ_grid)
+            # Set initial model parameters.
+            copyto!(train_problem.coeff.all, init_coeff)
+
+            for (i, s) in enumerate(s_grid)
+                model_size = [sparsity_to_k(s, p) for _ in 1:c-1]
+
+                # Update data structures due to change in sparsity.
+                __mm_update_sparsity__(algorithm, problem, ϵ, one(T), model_size, extras)
+
+                # Obtain solution as function of (s, ϵ).
+                result = fit_MVDA!(algorithm, train_problem, ϵ, s, extras, (false, false,); cb=cb, kwargs...)
+                copyto!(model.coeff.all, train_problem.coeff.all)
+                copyto!(model.proj.all, train_problem.proj.all)
+
+                cb(k, problem, train_problem, (train_set, validation_set, test_set), ϵ, s, model_size, result)
+
+                # Evaluate the solution.
+                score[i,j,k] = scoref(model, train_set, validation_set, test_set)
+
+                # Update the progress bar.
+                next!(progress_bar, showvalues=[(:fold, k), (:sparsity, s), (:ϵ, ϵ)])
+            end
+        end
+    end
+
+    # Package the result.
+    result = (;
+        epsilon=ϵ_grid,
+        sparsity=s_grid,
+        score=score,
+    )
+
+    return result
+end
+
+export IterationResult, SubproblemResult
+export MVDAProblem, MMSVD, fit_MVDA, fit_MVDA!, cv_MVDA
 
 end
