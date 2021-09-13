@@ -93,7 +93,7 @@ function __apply_nesterov__!(x, y, iter::Integer, needs_reset::Bool, r::Int=3)
         iter = 1
     else # Nesterov acceleration 
         γ = (iter - 1) / (iter + r - 1)
-        @inbounds @simd for i in eachindex(x)
+        @inbounds for i in eachindex(x)
             xi, yi = x[i], y[i]
             zi = xi + γ * (xi - yi)
             x[i], y[i] = zi, xi

@@ -44,7 +44,7 @@ function __mm_update_sparsity__(::MMSVD, problem, ϵ, ρ, k, extras)
     n, p, c = probdims(problem)
 
     # Update scaling factors on distance penalty, Dⱼⱼ = 1 / √( (c-1) * (p-kⱼ+1) )
-    @inbounds @simd for j in eachindex(D.diag)
+    @inbounds for j in eachindex(D.diag)
         D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
         # D.diag[j] = 1 / sqrt( (c-1) )
     end
@@ -63,7 +63,7 @@ function __mm_update_rho__(::MMSVD, problem, ϵ, ρ, k, extras)
         Ψⱼ = Ψ[j]
         b² = ρ / ( (c-1) * (p-k[j]+1) )
         # b² = ρ / ( (c-1) )
-        @inbounds @simd for i in eachindex(Ψⱼ.diag)
+        @inbounds for i in eachindex(Ψⱼ.diag)
             sᵢ² = s[i]^2
             Ψⱼ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
         end
@@ -74,22 +74,15 @@ end
 
 # Apply one update.
 function __mm_iterate__(::MMSVD, problem, ϵ, ρ, k, extras)
-    @unpack coeff, proj = problem
+    @unpack intercept, coeff, proj = problem
     @unpack buffer, apply_projection = extras
     @unpack Z, Ψ, U, s, V = extras
     Σ = Diagonal(s)
     T = floattype(problem)
 
     # need to compute Z via residuals...
-    for j in eachindex(proj.dim)
-        # Rename relavent arrays/views
-        βⱼ = coeff.dim[j]
-        pⱼ = proj.dim[j]
-        
-        # Project βⱼ onto the sparsity set S(kⱼ).
-        copyto!(pⱼ, βⱼ)
-        apply_projection(pⱼ, k[j])
-    end
+    copyto!(proj.all, coeff.all)
+    apply_projection(proj.all, k, on=:col, intercept=intercept)
     __evaluate_residuals__(problem, ϵ, extras, true, false, true)
 
     for j in eachindex(coeff.dim)

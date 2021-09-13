@@ -8,8 +8,8 @@ __allocate_coeff__(T, nfeatures, nclasses)
 
 Allocate a `NamedTuple` storing data similar in shape to model coefficients.
 """
-function __allocate_coeff__(T, n, c)
-    arr = similar(Matrix{T}, n, c-1)
+function __allocate_coeff__(T, p, c)
+    arr = similar(Matrix{T}, p, c-1)
     return (
         all=arr,                                # full coefficients vector
         dim=[view(arr, :, j) for j in 1:c-1]  # views into parameters for each class
@@ -58,6 +58,7 @@ struct MVDAProblem{T,matT,labelT,viewT,R1,R2,R3}
     vertex::Vector{Vector{T}}
     label2vertex::Dict{labelT,Vector{T}}
     vertex2label::Dict{Vector{T},labelT}
+    intercept::Bool
 
     ##### model #####
     coeff::Coefficients{matT,viewT}
@@ -69,7 +70,7 @@ struct MVDAProblem{T,matT,labelT,viewT,R1,R2,R3}
     grad::Coefficients{matT,viewT}
 end
 
-function MVDAProblem{T}(Y, X, vertex, label2vertex, vertex2label, coeff, coeff_prev, proj, res, grad) where T <: Real
+function MVDAProblem{T}(Y, X, vertex, label2vertex, vertex2label, intercept, coeff, coeff_prev, proj, res, grad) where T <: Real
     # get type parameters
     matT = typeof(Y)
     labelT = keytype(label2vertex)
@@ -79,13 +80,20 @@ function MVDAProblem{T}(Y, X, vertex, label2vertex, vertex2label, coeff, coeff_p
     R3 = typeof(res.weighted)
     
     MVDAProblem{T,matT,labelT,viewT,R1,R2,R3}(
-        Y, X, vertex, label2vertex, vertex2label,   # data
-        coeff, coeff_prev,                          # model
-        proj, res, grad,                            # quadratic surrogate
+        Y, X, vertex, label2vertex, vertex2label, intercept,
+        coeff, coeff_prev,
+        proj, res, grad,
     )
 end
 
-function MVDAProblem(labels, X)
+function MVDAProblem(labels, X; intercept=true)
+    # modify data in case intercept is used
+    if intercept
+        X = [X ones(size(X, 1))]
+    else
+        X = copy(X)
+    end
+
     # get problem info
     class = unique(labels)
     (n, p), c = size(X), length(class)
@@ -119,9 +127,9 @@ function MVDAProblem(labels, X)
     grad = __allocate_coeff__(T, p, c)
 
     return MVDAProblem{T}(
-        Y, X, vertex, label2vertex, vertex2label,   # data
-        coeff, coeff_prev,                          # model
-        proj, res, grad,                            # quadratic surrogate
+        Y, X, vertex, label2vertex, vertex2label, intercept,
+        coeff, coeff_prev,
+        proj, res, grad,
     )
 end
 
@@ -133,17 +141,7 @@ floattype(::MVDAProblem{T}) where T = T
 """
 Returns the number of samples, number of features, and number of categories, respectively.
 """
-probdims(problem::MVDAProblem) = size(problem.X, 1), size(problem.X, 2), length(problem.vertex)
-
-"""
-Returns the prefactors on main residuals and distance resdiduals.
-"""
-function get_prefactors(problem::MVDAProblem, rho, k)
-    n, p, c = probdims(problem)
-    a = 1 / sqrt(n)
-    b = sqrt(1 / (p - k + 1))
-    return a, b
-end
+probdims(problem::MVDAProblem) = size(problem.X, 1), size(problem.X, 2) - problem.intercept, length(problem.vertex)
 
 predict(problem::MVDAProblem, x::AbstractVector) = problem.proj.all' * x
 predict(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> predict(problem, xᵢ), eachrow(X))
@@ -168,4 +166,5 @@ function Base.show(io::IO, problem::MVDAProblem)
     print(io, "\n  ∘ $(n) sample(s) ($(respT))")
     print(io, "\n  ∘ $(p) feature(s) ($(matT))")
     print(io, "\n  ∘ $(c) categories ($(labelT))")
+    print(io, "\n  ∘ intercept? $(problem.intercept)")
 end

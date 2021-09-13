@@ -35,7 +35,7 @@ function __mm_update_sparsity__(::SD, problem, ϵ, ρ, k, extras)
     n, p, c = probdims(problem)
 
     # Update scaling factors on distance penalty, Dⱼⱼ = 1 / √( (c-1) * (p-kⱼ+1) )
-    @inbounds @simd for j in eachindex(D.diag)
+    @inbounds for j in eachindex(D.diag)
         D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
         # D.diag[j] = 1 / sqrt( (c-1) )
     end
@@ -48,21 +48,14 @@ __mm_update_rho__(::SD, problem, ϵ, ρ, k, extras) = nothing
 
 # Apply one update.
 function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
-    @unpack X, coeff, proj, grad, res = problem
+    @unpack X, intercept, coeff, proj, grad, res = problem
     @unpack apply_projection, D = extras
     n, p, c = probdims(problem)
     T = floattype(problem)
 
     # Project and then evaluate gradient.
-    for j in eachindex(proj.dim)
-        # Rename relavent arrays/views
-        βⱼ = coeff.dim[j]
-        pⱼ = proj.dim[j]
-        
-        # Project βⱼ onto the sparsity set S(kⱼ).
-        copyto!(pⱼ, βⱼ)
-        apply_projection(pⱼ, k[j])
-    end
+    copyto!(proj.all, coeff.all)
+    apply_projection(proj.all, k, on=:col, intercept=intercept)
     __evaluate_residuals__(problem, ϵ, extras, true, true, false)
     __evaluate_gradient__(problem, ρ, extras)
 

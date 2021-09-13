@@ -162,7 +162,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:
     end
 
     # Get problem info and extra data structures.
-    @unpack coeff, coeff_prev, proj = problem
+    @unpack intercept, coeff, coeff_prev, proj = problem
     @unpack apply_projection = extras
     n, p, c = probdims(problem)
     
@@ -182,10 +182,8 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:
     update_extras[2] && __mm_update_rho__(algorithm, problem, ϵ, ρ, k, extras)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    for j in eachindex(proj.dim)
-        copyto!(proj.dim[j], coeff.dim[j])
-        apply_projection(proj.dim[j], k[j])
-    end
+    copyto!(proj.all, coeff.all)
+    apply_projection(proj.all, k, on=:col, intercept=intercept)
     init_result = __evaluate_objective__(problem, ϵ, ρ, extras)
     result = SubproblemResult(0, init_result)
     cb(0, problem, ϵ, ρ, k, result)
@@ -214,10 +212,8 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:
     end
     
     # Project solution to the constraint set.
-    for j in eachindex(proj.dim)
-        copyto!(proj.dim[j], coeff.dim[j])
-        apply_projection(proj.dim[j], k[j])
-    end
+    copyto!(proj.all, coeff.all)
+    apply_projection(proj.all, k, on=:col, intercept=intercept)
     loss, obj, dist, gradsq = __evaluate_objective__(problem, ϵ, ρ, extras)
 
     if verbose
@@ -269,7 +265,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,Abstrac
     end
 
     # Get problem info and extra data structures.
-    @unpack coeff, coeff_prev, proj = problem
+    @unpack intercept, coeff, coeff_prev, proj = problem
     @unpack apply_projection = extras
     n, p, c = probdims(problem)
 
@@ -285,10 +281,8 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,Abstrac
     update_extras[2] && __mm_update_rho__(algorithm, problem, ϵ, ρ, k, extras)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    for j in eachindex(proj.dim)
-        copyto!(proj.dim[j], coeff.dim[j])
-        apply_projection(proj.dim[j], k[j])
-    end
+    copyto!(proj.all, coeff.all)
+    apply_projection(proj.all, k, on=:col, intercept=intercept)
     result = __evaluate_objective__(problem, ϵ, ρ, extras)
     cb(0, problem, ϵ, ρ, k, result)
     old = result.objective
@@ -310,10 +304,8 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,Abstrac
         __mm_iterate__(algorithm, problem, ϵ, ρ, k, extras)
 
         # Update loss, objective, distance, and gradient.
-        for j in eachindex(proj.dim)
-            copyto!(proj.dim[j], coeff.dim[j])
-            apply_projection(proj.dim[j], k[j])
-        end
+        copyto!(proj.all, coeff.all)
+        apply_projection(proj.all, k, on=:col, intercept=intercept)
         result = __evaluate_objective__(problem, ϵ, ρ, extras)
 
         cb(iter, problem, ϵ, ρ, k, result)
@@ -364,10 +356,9 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
     # Initialize model object; just used to pass around coefficients.
     n, p, c = probdims(problem)
     T = floattype(problem)
-    coeff_copy = deepcopy(problem.coeff)
-    model = MVDAProblem{T}(Y, X, problem.vertex, problem.label2vertex, problem.vertex2label,
-        coeff_copy, problem.coeff_prev,
-        problem.proj, problem.res, problem.grad
+    model = MVDAProblem{T}(Y, X, problem.vertex, problem.label2vertex, problem.vertex2label, problem.intercept,
+        deepcopy(problem.coeff), deepcopy(problem.coeff_prev),
+        deepcopy(problem.proj), problem.res, deepcopy(problem.grad)
     )
 
     # Set initial model coefficients.
@@ -386,11 +377,11 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
         train_set, validation_set = fold
         train_Y, train_X = train_set
         train_n = size(train_Y, 1)
-        train_res = __allocate_res__(T, train_n, p, c)
+        train_res = __allocate_res__(T, train_n, p+problem.intercept, c)
         
         # Create a problem object for the training set.
         train_problem = MVDAProblem{T}(copy(train_Y), copy(train_X),
-            problem.vertex, problem.label2vertex, problem.vertex2label,
+            problem.vertex, problem.label2vertex, problem.vertex2label, problem.intercept,
             deepcopy(problem.coeff), deepcopy(problem.coeff_prev),
             deepcopy(problem.proj), train_res, deepcopy(problem.grad),
         )

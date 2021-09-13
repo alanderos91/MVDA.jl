@@ -71,6 +71,24 @@ struct ApplyL0Projection <: Function
     idx::Vector{Int}
 end
 
-function (P::ApplyL0Projection)(x, k)
+function (P::ApplyL0Projection)(x::AbstractVector, k)
     project_l0_ball!(x, P.idx, k)
+end
+
+function (P::ApplyL0Projection)(X::AbstractMatrix, k; on::Symbol=:col, intercept::Bool=true)
+    n, m = size(X)
+    if on == :col
+        # apply projection on columns
+        for j in 1:m
+            xⱼ = view(X, 1:n-intercept, j)
+            P(xⱼ, k[j])
+        end
+    elseif on == :row
+        # apply projection on rows
+        for i in 1:n-intercept
+            xᵢ = view(X, i, :)
+            P(xᵢ, k[i])
+        end
+    end
+    return X
 end
