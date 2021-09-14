@@ -112,12 +112,14 @@ abstract type AbstractMMAlg end
 __mm_init__(algorithm::AbstractMMAlg, problem, extras) = not_implemented(algorithm, "Initialization step")
 __mm_iterate__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Iteration step")
 __mm_iterate__(algorithm::AbstractMMAlg, problem, ϵ, λ, extras) = not_implemented(algorithm, "Iteration step (regularized)")
+__mm_iterate__(algorithm, problem, ϵ, δ, λ₁, λ₂, extras) = not_implemented(algorithm, "Iteration step (Euclidean)")
 __mm_update_sparsity__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Update sparsity step")
 __mm_update_rho__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Update ρ step")
 __mm_update_lambda__(algorithm::AbstractMMAlg, problem, ϵ, λ, extras) = not_implemented(algorithm, "Update λ step")
 
 include(joinpath("algorithms", "SD.jl"))
 include(joinpath("algorithms", "MMSVD.jl"))
+include(joinpath("algorithms", "CyclicVDA.jl"))
 
 const DEFAULT_ANNEALING = geometric_progression
 const DEFAULT_CALLBACK = __do_nothing_callback__
@@ -498,7 +500,60 @@ function fit_regMVDA!(algorithm, problem, ϵ, λ, extras=nothing, update_extras:
     return  SubproblemResult(iters, result)
 end
 
+function fit_MVDA(algorithm::CyclicVDA, problem, ϵ, δ, λ₁, λ₂;
+        niter::Int=10^3,
+        atol=1e-4,
+    )
+    @unpack Y, X, res, coeff = problem
+    # δ = 1 / 20
+    # ϵ = 1//2 * sqrt(2*c/(c-1))
+    n, p, c = probdims(problem)
+    μ₁ = n * λ₁
+    μ₂ = n * λ₂
+
+    # initialize residuals
+    mul!(res.main.all, X, coeff.all)
+    axpby!(1.0, Y, -1.0, res.main.all)
+    extras = nothing
+
+    full_objective, _, _ = fetch_objective(problem, p+1, 1, ϵ, δ, λ₁, λ₂)
+    penalty1 = 0.0
+    penalty2 = 0.0
+    for j in 1:p # does not include intercept here
+        β = view(problem.coeff.all, j, :)
+        penalty1 = penalty1 + μ₁ * norm(β, 1)
+        penalty2 = penalty2 + μ₂ * norm(β, 2)
+    end
+    full_objective = full_objective + penalty2 + penalty1
+
+    iters = 0
+    for iter in 1:niter
+        iters += 1
+
+        __mm_iterate__(algorithm, problem, ϵ, δ, λ₁, λ₂, extras)
+        loss, _, _ = fetch_objective(problem, p+1, 1, ϵ, δ, λ₁, λ₂)
+        penalty1 = 0.0
+        penalty2 = 0.0
+        for j in 1:p # does not include intercept here
+            β = view(problem.coeff.all, j, :)
+            penalty1 = penalty1 + μ₁ * norm(β, 1)
+            penalty2 = penalty2 + μ₂ * norm(β, 2)
+        end
+        objective = loss + penalty2 + penalty1
+
+        if objective > full_objective error("Descent failure") end
+
+        if full_objective - objective < atol break end
+        full_objective = objective
+    end
+
+    copyto!(problem.proj.all, coeff.all)
+
+    return full_objective, penalty1, penalty2
+end
+
 export IterationResult, SubproblemResult
-export MVDAProblem, SD, MMSVD, fit_MVDA, fit_MVDA!, cv_MVDA, fit_regMVDA
+export MVDAProblem, SD, MMSVD, CyclicVDA
+export fit_MVDA, fit_MVDA!, cv_MVDA, fit_regMVDA
 
 end
