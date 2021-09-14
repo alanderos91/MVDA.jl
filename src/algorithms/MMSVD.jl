@@ -72,6 +72,25 @@ function __mm_update_rho__(::MMSVD, problem, ϵ, ρ, k, extras)
     return nothing
 end
 
+# Update data structures due to changing λ.
+function __mm_update_lambda__(::MMSVD, problem, ϵ, λ, extras)
+    @unpack s, Ψ = extras
+    n, p, c = probdims(problem)
+    a² = 1 / n
+
+    # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
+    @inbounds for j in eachindex(Ψ)
+        Ψⱼ = Ψ[j]
+        b² = λ
+        @inbounds for i in eachindex(Ψⱼ.diag)
+            sᵢ² = s[i]^2
+            Ψⱼ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
+        end
+    end
+
+    return nothing
+end
+
 # Apply one update.
 function __mm_iterate__(::MMSVD, problem, ϵ, ρ, k, extras)
     @unpack intercept, coeff, proj = problem
@@ -100,6 +119,35 @@ function __mm_iterate__(::MMSVD, problem, ϵ, ρ, k, extras)
         lmul!(Ψⱼ, buffer)
         mul!(βⱼ, V, buffer)
         axpy!(one(T), pⱼ, βⱼ)
+        # @assert βⱼ ≈ pⱼ + V * Ψⱼ * (inv(Σ)*U'*zⱼ - V'*pⱼ)
+    end
+
+    return nothing
+end
+
+# Apply one update in regularized version.
+function __mm_iterate__(::MMSVD, problem, ϵ, λ, extras)
+    @unpack intercept, coeff, proj = problem
+    @unpack buffer = extras
+    @unpack Z, Ψ, U, s, V = extras
+    Σ = Diagonal(s)
+    T = floattype(problem)
+
+    # need to compute Z via residuals...
+    __evaluate_residuals__(problem, ϵ, extras, true, false, true)
+
+    for j in eachindex(coeff.dim)
+        # Rename relevant arrays/views
+        βⱼ = coeff.dim[j]
+        zⱼ = view(Z, :, j)
+        Ψⱼ = Ψ[j]
+
+        # Update parameters along dimension j:
+        # βⱼ = V' * Ψⱼ * Σ⁻¹Uᵀzⱼ)
+        mul!(buffer, U', zⱼ)
+        ldiv!(Σ, buffer)
+        lmul!(Ψⱼ, buffer)
+        mul!(βⱼ, V, buffer)
         # @assert βⱼ ≈ pⱼ + V * Ψⱼ * (inv(Σ)*U'*zⱼ - V'*pⱼ)
     end
 

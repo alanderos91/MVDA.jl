@@ -65,6 +65,19 @@ function __evaluate_gradient__(problem, ρ, extras)
     return nothing
 end
 
+function __evaluate_gradient_reg__(problem, λ, extras)
+    @unpack X, res, grad = problem
+
+    for j in eachindex(grad.dim)
+        # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ λI] * Rₘ,ⱼ
+        a = 1 / sqrt(size(X, 1))
+        mul!(grad.dim[j], X', res.weighted.dim[j])
+        axpby!(λ, problem.coeff.dim[j], -a, grad.dim[j])
+    end
+
+    return nothing
+end
+
 """
 Evaluate the penalized least squares criterion. Also updates the gradient.
 This assumes that projections have been handled externally.
@@ -81,6 +94,19 @@ function __evaluate_objective__(problem, ϵ, ρ, extras)
     gradsq = norm(grad.all)^2
 
     return IterationResult(loss, obj, dist, gradsq)
+end
+
+function __evaluate_objective_reg__(problem, ϵ, λ, extras)
+    @unpack res, grad = problem
+
+    __evaluate_residuals__(problem, ϵ, extras, true, false, false)
+    __evaluate_gradient_reg__(problem, λ, extras)
+
+    loss = norm(res.weighted.all)^2 # 1/n * ∑ᵢ (Zᵢ - Bᵀxᵢ)²
+    objective = 1//2 * (loss + λ * norm(problem.coeff.all))
+    gradsq = norm(grad.all)^2
+
+    return IterationResult(loss, objective, 0.0, gradsq)
 end
 
 """

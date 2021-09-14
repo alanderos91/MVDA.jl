@@ -111,8 +111,10 @@ abstract type AbstractMMAlg end
 
 __mm_init__(algorithm::AbstractMMAlg, problem, extras) = not_implemented(algorithm, "Initialization step")
 __mm_iterate__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Iteration step")
+__mm_iterate__(algorithm::AbstractMMAlg, problem, ϵ, λ, extras) = not_implemented(algorithm, "Iteration step (regularized)")
 __mm_update_sparsity__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Update sparsity step")
 __mm_update_rho__(algorithm::AbstractMMAlg, problem, ϵ, ρ, k, extras) = not_implemented(algorithm, "Update ρ step")
+__mm_update_lambda__(algorithm::AbstractMMAlg, problem, ϵ, λ, extras) = not_implemented(algorithm, "Update λ step")
 
 include(joinpath("algorithms", "SD.jl"))
 include(joinpath("algorithms", "MMSVD.jl"))
@@ -423,7 +425,80 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
     return result
 end
 
+function fit_regMVDA(algorithm, problem, ϵ::Real, λ::Real; kwargs...)
+    # Initialize any additional data structures.
+    extras = __mm_init__(algorithm, problem, nothing)
+
+    fit_regMVDA!(algorithm, problem, ϵ, λ, extras, true; kwargs...)
+end
+
+function fit_regMVDA!(algorithm, problem, ϵ, λ, extras=nothing, update_extras::Bool=true;
+    ninner::Int=10^4,
+    gtol::Real=1e-6,
+    nesterov_threshold::Int=10,
+    verbose::Bool=false,
+    cb::Function=DEFAULT_CALLBACK,
+    kwargs...
+    )
+    # Check for missing data structures.
+    if extras isa Nothing
+        error("Detected missing data structures for algorithm $(algorithm).")
+    end
+
+    # Get problem info and extra data structures.
+    @unpack intercept, coeff, coeff_prev, proj = problem
+    n, p, c = probdims(problem)
+
+    update_extras && __mm_update_lambda__(algorithm, problem, ϵ, λ, extras)
+
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    copyto!(proj.all, coeff.all)
+    result = __evaluate_objective_reg__(problem, ϵ, λ, extras)
+    # cb(0, problem, ϵ, 0.0, k, result)
+    old = result.objective
+
+    if result.gradient < gtol
+        return SubproblemResult(0, result)
+    end
+
+    # Initialize iteration counts.
+    copyto!(coeff_prev.all, coeff.all)
+    iters = 0
+    nesterov_iter = 1
+
+    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|²")
+    for iter in 1:ninner
+        iters += 1
+
+        # Apply the algorithm map to minimize the quadratic surrogate.
+        __mm_iterate__(algorithm, problem, ϵ, λ, extras)
+
+        # Update loss, objective, distance, and gradient.
+        copyto!(proj.all, coeff.all)
+        result = __evaluate_objective_reg__(problem, ϵ, λ, extras)
+
+        # cb(iter, problem, ϵ, 0.0, k, result)
+
+        if verbose
+            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, result.distance, result.gradient)
+        end
+
+        # Assess convergence.
+        obj = result.objective
+        gradsq = result.gradient
+        if gradsq < gtol
+            break
+        elseif iter < ninner
+            needs_reset = iter < nesterov_threshold || obj > old
+            nesterov_iter = __apply_nesterov__!(coeff.all, coeff_prev.all, nesterov_iter, needs_reset)
+            old = obj
+        end
+    end
+
+    return  SubproblemResult(iters, result)
+end
+
 export IterationResult, SubproblemResult
-export MVDAProblem, SD, MMSVD, fit_MVDA, fit_MVDA!, cv_MVDA
+export MVDAProblem, SD, MMSVD, fit_MVDA, fit_MVDA!, cv_MVDA, fit_regMVDA
 
 end
