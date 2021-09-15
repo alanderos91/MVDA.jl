@@ -16,7 +16,7 @@ function __mm_init__(::SD, problem, ::Nothing)
     D = Diagonal(Vector{T}(undef, c-1))
 
     return (;
-        apply_projection = ApplyL0Projection(collect(1:p)), D=D, Z=Z,
+        apply_projection=ApplyStructuredL0Projection(p), D=D, Z=Z,
     )
 end
 
@@ -36,8 +36,8 @@ function __mm_update_sparsity__(::SD, problem, ϵ, ρ, k, extras)
 
     # Update scaling factors on distance penalty, Dⱼⱼ = 1 / √( (c-1) * (p-kⱼ+1) )
     @inbounds for j in eachindex(D.diag)
-        D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
-        # D.diag[j] = 1 / sqrt( (c-1) )
+        # D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
+        D.diag[j] = 1 / sqrt(p)
     end
 
     return nothing
@@ -55,7 +55,7 @@ function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
 
     # Project and then evaluate gradient.
     copyto!(proj.all, coeff.all)
-    apply_projection(proj.all, k, on=:col, intercept=intercept)
+    apply_projection(view(proj.all, 1:p, :), k)
     __evaluate_residuals__(problem, ϵ, extras, true, true, false)
     __evaluate_gradient__(problem, ρ, extras)
 

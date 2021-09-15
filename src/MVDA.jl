@@ -134,7 +134,7 @@ Solve optimization problem at sparsity levels `s` and `ϵ`-insensitive pseudodis
 Solution is obtained via a proximal distance `algorithm` that gradually anneals parameter estimates
 toward the target sparsity set.
 """
-function fit_MVDA(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:Real}}; kwargs...)
+function fit_MVDA(algorithm, problem, ϵ::Real, s::Real; kwargs...)
     # Initialize any additional data structures.
     extras = __mm_init__(algorithm, problem, nothing)
 
@@ -149,7 +149,7 @@ fit_MVDA!(algorithm, problem, ϵ, s, [extras], [update_hyperparams]; kwargs...)
 Same as `fit_MVDA(algorithm, problem, ϵ, s)`, but with preallocated data structures in `extras`.
 The caller should specify whether to update data structures depending on `s` (default=`true`).
 """
-function fit_MVDA!(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:Real}}, extras=nothing, update_extras::NTuple{2,Bool}=(true,false,);
+function fit_MVDA!(algorithm, problem, ϵ::Real, s::Real, extras=nothing, update_extras::NTuple{2,Bool}=(true,false,);
     nouter::Int=100,
     dtol::Real=1e-6,
     rtol::Real=1e-6,
@@ -171,11 +171,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:
     n, p, c = probdims(problem)
     
     # Fix model size(s).
-    if s isa Real
-        k = [sparsity_to_k(s, p) for _ in 1:c-1]
-    else
-        k = sparsity_to_k.(s, p)
-    end
+    k = sparsity_to_k(s, p)
 
     # Initialize ρ and iteration count.
     ρ = rho_init
@@ -187,7 +183,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     copyto!(proj.all, coeff.all)
-    apply_projection(proj.all, k, on=:col, intercept=intercept)
+    apply_projection(view(proj.all, 1:p, :), k)
     init_result = __evaluate_objective__(problem, ϵ, ρ, extras)
     result = SubproblemResult(0, init_result)
     cb(0, problem, ϵ, ρ, k, result)
@@ -217,7 +213,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Union{Real,AbstractVector{<:
     
     # Project solution to the constraint set.
     copyto!(proj.all, coeff.all)
-    apply_projection(proj.all, k, on=:col, intercept=intercept)
+    apply_projection(view(proj.all, 1:p, :), k)
     loss, obj, dist, gradsq = __evaluate_objective__(problem, ϵ, ρ, extras)
 
     if verbose
@@ -238,7 +234,7 @@ fit_MVDA(algorithm, problem, ϵ, ρ, s; kwargs...)
 
 Solve the `ρ`-penalized optimization problem at sparsity level `s`.
 """
-function fit_MVDA(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,AbstractVector{<:Real}}; kwargs...)
+function fit_MVDA(algorithm, problem, ϵ::Real, ρ::Real, s::Real; kwargs...)
     # Initialize any additional data structures.
     extras = __mm_init__(algorithm, problem, nothing)
 
@@ -255,7 +251,7 @@ The caller should specify whether to update data structures depending on
 
 Same as `fit_MVDA!(algorithm, problem, ϵ, ρ, s)`, but with preallocated data structures in `extras`.
 """
-function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,AbstractVector{<:Real}}, extras=nothing, update_extras::NTuple{2,Bool}=(true,true);
+function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Real, extras=nothing, update_extras::NTuple{2,Bool}=(true,true);
     ninner::Int=10^4,
     gtol::Real=1e-6,
     nesterov_threshold::Int=10,
@@ -274,11 +270,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,Abstrac
     n, p, c = probdims(problem)
 
     # Fix model size(s).
-    if s isa Real
-        k = [sparsity_to_k(s, p) for _ in 1:c-1]
-    else
-        k = sparsity_to_k.(s, p)
-    end
+    k = sparsity_to_k(s, p)
 
     # Update data structures due to hyperparameters.
     update_extras[1] && __mm_update_sparsity__(algorithm, problem, ϵ, ρ, k, extras)
@@ -286,7 +278,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,Abstrac
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     copyto!(proj.all, coeff.all)
-    apply_projection(proj.all, k, on=:col, intercept=intercept)
+    apply_projection(view(proj.all, 1:p, :), k)
     result = __evaluate_objective__(problem, ϵ, ρ, extras)
     cb(0, problem, ϵ, ρ, k, result)
     old = result.objective
@@ -309,7 +301,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Union{Real,Abstrac
 
         # Update loss, objective, distance, and gradient.
         copyto!(proj.all, coeff.all)
-        apply_projection(proj.all, k, on=:col, intercept=intercept)
+        apply_projection(view(proj.all, 1:p, :), k)
         result = __evaluate_objective__(problem, ϵ, ρ, extras)
 
         cb(iter, problem, ϵ, ρ, k, result)
@@ -396,7 +388,7 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
             copyto!(train_problem.coeff.all, init_coeff)
 
             for (i, s) in enumerate(s_grid)
-                model_size = [sparsity_to_k(s, p) for _ in 1:c-1]
+                model_size = sparsity_to_k(s, p)
 
                 # Update data structures due to change in sparsity.
                 __mm_update_sparsity__(algorithm, problem, ϵ, one(T), model_size, extras)

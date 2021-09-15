@@ -33,6 +33,47 @@ function project_l0_ball!(x, idx, k)
     return x
 end
 
+function project_l0_ball!(X::AbstractMatrix, idx, scores, k; by::Union{Val{:row}, Val{:col}}=Val(:row))
+    if by isa Val{:row}
+        n = size(X, 1)
+        itr = axes(X, 1)
+        itr2 = eachrow(X)
+        f = i -> norm(view(X, i, :))
+    elseif by isa Val{:col}
+        n = size(X, 2)
+        itr = axes(X, 2)
+        itr2 = eachcol(X)
+        f = i -> norm(view(X, :, i))
+    else
+        error("uncrecognized option `by=$(by)`.")
+    end
+
+    # do nothing if k > length(x)
+    if k ≥ n return X end
+    
+    # fill with zeros if k ≤ 0
+    if k ≤ 0 return fill!(X, 0) end
+
+    # map rows to a score used in ranking; here we use Euclidean norms
+    map!(f, scores, itr)
+
+    # partially sort scores to find the top k rows
+    pivot = l0_search_partialsort!(idx, scores, k)
+
+    # apply the projection
+    kcount = 0
+    @inbounds for (scoreᵢ, xᵢ) in zip(scores, itr2)
+        # row is not in the top k
+        if scoreᵢ ≤ pivot || kcount ≥ k
+            fill!(xᵢ, 0)
+        else # row is in the top k
+            kcount += 1
+        end
+    end
+
+    return X
+end
+
 """
 Search `x` for the pivot that splits the vector into the `k`-largest elements in magnitude.
 
@@ -69,26 +110,27 @@ end
 
 struct ApplyL0Projection <: Function
     idx::Vector{Int}
+
+    function ApplyL0Projection(n::Int)
+        new(collect(1:n))
+    end
 end
 
 function (P::ApplyL0Projection)(x::AbstractVector, k)
     project_l0_ball!(x, P.idx, k)
 end
 
-function (P::ApplyL0Projection)(X::AbstractMatrix, k; on::Symbol=:col, intercept::Bool=true)
-    n, m = size(X)
-    if on == :col
-        # apply projection on columns
-        for j in 1:m
-            xⱼ = view(X, 1:n-intercept, j)
-            P(xⱼ, k[j])
-        end
-    elseif on == :row
-        # apply projection on rows
-        for i in 1:n-intercept
-            xᵢ = view(X, i, :)
-            P(xᵢ, k[i])
-        end
+struct ApplyStructuredL0Projection <: Function
+    idx::Vector{Int}
+    scores::Vector{Float64}
+
+    function ApplyStructuredL0Projection(n::Int)
+        idx = collect(1:n)
+        scores = zeros(n)
+        new(idx, scores)
     end
-    return X
+end
+
+function (P::ApplyStructuredL0Projection)(X::AbstractMatrix, k)
+    project_l0_ball!(X, P.idx, P.scores, k, by=Val(:row))
 end

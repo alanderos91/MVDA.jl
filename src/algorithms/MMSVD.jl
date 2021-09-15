@@ -22,7 +22,7 @@ function __mm_init__(::MMSVD, problem, ::Nothing)
     Ψ = [Diagonal(Vector{T}(undef, r)) for _ in 1:c-1]
     
     return (;
-        apply_projection=ApplyL0Projection(collect(1:p)),
+        apply_projection=ApplyStructuredL0Projection(p),
         U=U, s=s, V=V,
         Z=Z, D=D, Ψ=Ψ,
         buffer=buffer,
@@ -45,8 +45,8 @@ function __mm_update_sparsity__(::MMSVD, problem, ϵ, ρ, k, extras)
 
     # Update scaling factors on distance penalty, Dⱼⱼ = 1 / √( (c-1) * (p-kⱼ+1) )
     @inbounds for j in eachindex(D.diag)
-        D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
-        # D.diag[j] = 1 / sqrt( (c-1) )
+        # D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
+        D.diag[j] = 1 / sqrt(p)
     end
 
     return nothing
@@ -61,7 +61,7 @@ function __mm_update_rho__(::MMSVD, problem, ϵ, ρ, k, extras)
     # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
     @inbounds for j in eachindex(Ψ)
         Ψⱼ = Ψ[j]
-        b² = ρ / ( (c-1) * (p-k[j]+1) )
+        b² = ρ / p
         # b² = ρ / ( (c-1) )
         @inbounds for i in eachindex(Ψⱼ.diag)
             sᵢ² = s[i]^2
@@ -96,12 +96,13 @@ function __mm_iterate__(::MMSVD, problem, ϵ, ρ, k, extras)
     @unpack intercept, coeff, proj = problem
     @unpack buffer, apply_projection = extras
     @unpack Z, Ψ, U, s, V = extras
+    n, p, c = probdims(problem)
     Σ = Diagonal(s)
     T = floattype(problem)
 
     # need to compute Z via residuals...
     copyto!(proj.all, coeff.all)
-    apply_projection(proj.all, k, on=:col, intercept=intercept)
+    apply_projection(view(proj.all, 1:p, :), k)
     __evaluate_residuals__(problem, ϵ, extras, true, false, true)
 
     for j in eachindex(coeff.dim)
