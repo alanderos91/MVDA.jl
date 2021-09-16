@@ -546,6 +546,6 @@ end
 
 export IterationResult, SubproblemResult
 export MVDAProblem, SD, MMSVD, CyclicVDA
-export fit_MVDA, fit_MVDA!, cv_MVDA, fit_regMVDA
+export fit_MVDA, fit_MVDA!, cv_MVDA, fit_regMVDA, fit_regMVDA!
 
 end

@@ -78,7 +78,7 @@ problem.grad.dim[1]     # slice along column 1
 # residuals are split into 3 fields: main, dist, and weighted
 
 problem.res.main        # n × c-1; used to store scaled residuals 1/sqrt(n) * (Y - X*B)
-problem.res.dist        # p × c-1; used to store scaled residuals (P(B) - B)*D
+problem.res.dist        # p × c-1; used to store residuals (P(B) - B)
 problem.res.weighted    # n × c-1; used to store scaled residuals 1/sqrt(n) * (Zₘ - X*B)
 
 problem.res.main.all    # full matrix

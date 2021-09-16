@@ -12,17 +12,14 @@ function __mm_init__(::SD, problem, ::Nothing)
     # residuals subroutine requires an object named Z; need to fix
     Z = nothing
 
-    # diagonal matrix for prefactors
-    D = Diagonal(Vector{T}(undef, c-1))
-
     return (;
-        apply_projection=ApplyStructuredL0Projection(p), D=D, Z=Z,
+        apply_projection=ApplyStructuredL0Projection(p), Z=Z,
     )
 end
 
 # Check for data structure allocations; otherwise initialize.
 function __mm_init__(::SD, problem, extras)
-    if :apply_projection in keys(extras) && :D in keys(extras) # TODO
+    if :apply_projection in keys(extras) && :Z in keys(extras) # TODO
         return extras
     else
         __mm_init__(SD(), problem, nothing)
@@ -30,26 +27,18 @@ function __mm_init__(::SD, problem, extras)
 end
 
 # Update data structures due to change in model subsets, k.
-function __mm_update_sparsity__(::SD, problem, ϵ, ρ, k, extras)
-    @unpack D = extras
-    n, p, c = probdims(problem)
-
-    # Update scaling factors on distance penalty, Dⱼⱼ = 1 / √( (c-1) * (p-kⱼ+1) )
-    @inbounds for j in eachindex(D.diag)
-        # D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
-        D.diag[j] = 1 / sqrt(p)
-    end
-
-    return nothing
-end
+__mm_update_sparsity__(::SD, problem, ϵ, ρ, k, extras) = nothing
 
 # Update data structures due to changing ρ.
 __mm_update_rho__(::SD, problem, ϵ, ρ, k, extras) = nothing
 
+# Update data structures due to changing λ.
+__mm_update_lambda__(::SD, problem, ϵ, λ, extras) = nothing
+
 # Apply one update.
 function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
-    @unpack X, intercept, coeff, proj, grad, res = problem
-    @unpack apply_projection, D = extras
+    @unpack X, coeff, proj, grad, res = problem
+    @unpack apply_projection = extras
     n, p, c = probdims(problem)
     T = floattype(problem)
 
@@ -60,22 +49,55 @@ function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
     __evaluate_gradient__(problem, ρ, extras)
 
     # Find optimal step size
-
-    A = zero(T)
-    B = zero(T)
+    C1 = zero(T)
+    C2 = zero(T)
     a² = 1/n
-    for j in axes(B, 2)
+    b² = ρ
+    for j in eachindex(grad.dim)
         gⱼ = grad.dim[j]
         Xgⱼ = res.main.dim[j]
-        bⱼ² = ρ * D[j,j]^2
         mul!(Xgⱼ, X, gⱼ)
         normgⱼ² = dot(gⱼ, gⱼ)
         normXgⱼ² = dot(Xgⱼ, Xgⱼ)
 
-        A += normgⱼ²
-        B += a² * normXgⱼ² + bⱼ² * normgⱼ²
+        C1 += normgⱼ²
+        C2 += normXgⱼ²
     end
-    t = A / B
+    t = C1 / (a²*C2 + b²*C1)
+
+    # Move in the direction of steepest descent.
+    axpy!(-t, grad.all, coeff.all)
+
+    return nothing
+end
+
+
+# Apply one update in regularized version.
+function __mm_iterate__(::SD, problem, ϵ, λ, extras)
+    @unpack X, coeff, proj, grad, res = problem
+    n, p, c = probdims(problem)
+    T = floattype(problem)
+
+    # Evaluate gradient.
+    __evaluate_residuals__(problem, ϵ, extras, true, false, false)
+    __evaluate_gradient_reg__(problem, λ, extras)
+
+    # Find optimal step size
+    C1 = zero(T)
+    C2 = zero(T)
+    a² = 1/n
+    b² = λ
+    for j in eachindex(grad.dim)
+        gⱼ = grad.dim[j]
+        Xgⱼ = res.main.dim[j]
+        mul!(Xgⱼ, X, gⱼ)
+        normgⱼ² = dot(gⱼ, gⱼ)
+        normXgⱼ² = dot(Xgⱼ, Xgⱼ)
+
+        C1 += normgⱼ²
+        C2 += normXgⱼ²
+    end
+    t = C1 / (a²*C2 + b²*C1)
 
     # Move in the direction of steepest descent.
     axpy!(-t, grad.all, coeff.all)

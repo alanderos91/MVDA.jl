@@ -10,7 +10,7 @@ The following flags control how residuals are evaluated:
 """
 function __evaluate_residuals__(problem, ϵ, extras, need_main::Bool, need_dist::Bool, need_z::Bool)
     @unpack Y, X, coeff, proj, res = problem
-    @unpack Z, D = extras
+    @unpack Z = extras
     T = floattype(problem)
 
     if need_main
@@ -38,10 +38,9 @@ function __evaluate_residuals__(problem, ϵ, extras, need_main::Bool, need_dist:
     end
 
     if need_dist
-        # res_dist = (P(B) - B)*D where Dⱼⱼ = √( 1/ [(c-1) * (p-kⱼ+1)] )
+        # res_dist = P(B) - B
         copyto!(res.dist.all, proj.all)
         axpby!(-one(T), coeff.all, one(T), res.dist.all)
-        rmul!(res.dist.all, D)
     end
 
     return nothing
@@ -52,14 +51,13 @@ Evaluate the gradiant of the regression problem. Assumes residuals have been eva
 """
 function __evaluate_gradient__(problem, ρ, extras)
     @unpack X, res, grad = problem
-    @unpack D = extras
 
     for j in eachindex(grad.dim)
         # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ bⱼI] * Rₘ,ⱼ
         a = 1 / sqrt(size(X, 1))
-        b = D[j,j]
+        b = ρ
         mul!(grad.dim[j], X', res.weighted.dim[j])
-        axpby!(-b*ρ, res.dist.dim[j], -a, grad.dim[j])
+        axpby!(-b, res.dist.dim[j], -a, grad.dim[j])
     end
 
     return nothing
@@ -89,7 +87,7 @@ function __evaluate_objective__(problem, ϵ, ρ, extras)
     __evaluate_gradient__(problem, ρ, extras)
 
     loss = norm(res.weighted.all)^2 # 1/n * ∑ᵢ (Zᵢ - Bᵀxᵢ)²
-    dist = norm(res.dist.all)^2     # 1/(c-1) ∑ⱼ 1/(p-kⱼ+1) * (P(B)ⱼ - Bⱼ)²
+    dist = norm(res.dist.all)^2     # ∑ⱼ (P(B)ⱼ - Bⱼ)²
     obj = 1//2 * (loss + ρ * dist)
     gradsq = norm(grad.all)^2
 

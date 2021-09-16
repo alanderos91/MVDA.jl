@@ -18,13 +18,12 @@ function __mm_init__(::MMSVD, problem, ::Nothing)
     buffer = Vector{T}(undef, r)
     
     # diagonal matrices
-    D = Diagonal(Vector{T}(undef, c-1))
     Ψ = [Diagonal(Vector{T}(undef, r)) for _ in 1:c-1]
     
     return (;
         apply_projection=ApplyStructuredL0Projection(p),
         U=U, s=s, V=V,
-        Z=Z, D=D, Ψ=Ψ,
+        Z=Z, Ψ=Ψ,
         buffer=buffer,
     )
 end
@@ -39,18 +38,7 @@ function __mm_init__(::MMSVD, problem, extras)
 end
 
 # Update data structures due to change in model subsets, k.
-function __mm_update_sparsity__(::MMSVD, problem, ϵ, ρ, k, extras)
-    @unpack D = extras
-    n, p, c = probdims(problem)
-
-    # Update scaling factors on distance penalty, Dⱼⱼ = 1 / √( (c-1) * (p-kⱼ+1) )
-    @inbounds for j in eachindex(D.diag)
-        # D.diag[j] = 1 / sqrt( (c-1) * (p-k[j]+1) )
-        D.diag[j] = 1 / sqrt(p)
-    end
-
-    return nothing
-end
+__mm_update_sparsity__(::MMSVD, problem, ϵ, ρ, k, extras) = nothing
 
 # Update data structures due to changing ρ.
 function __mm_update_rho__(::MMSVD, problem, ϵ, ρ, k, extras)
@@ -61,8 +49,7 @@ function __mm_update_rho__(::MMSVD, problem, ϵ, ρ, k, extras)
     # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
     @inbounds for j in eachindex(Ψ)
         Ψⱼ = Ψ[j]
-        b² = ρ / p
-        # b² = ρ / ( (c-1) )
+        b² = ρ
         @inbounds for i in eachindex(Ψⱼ.diag)
             sᵢ² = s[i]^2
             Ψⱼ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
@@ -149,7 +136,6 @@ function __mm_iterate__(::MMSVD, problem, ϵ, λ, extras)
         ldiv!(Σ, buffer)
         lmul!(Ψⱼ, buffer)
         mul!(βⱼ, V, buffer)
-        # @assert βⱼ ≈ pⱼ + V * Ψⱼ * (inv(Σ)*U'*zⱼ - V'*pⱼ)
     end
 
     return nothing
