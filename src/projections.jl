@@ -2,38 +2,67 @@
 Project `x` onto sparsity set with `k` non-zero elements.
 Assumes `idx` enters as a vector of indices into `x`.
 """
-function project_l0_ball!(x, idx, k)
-    #
-    #   do nothing if k > length(x)
-    #
-    if k ≥ length(x) return x end
+function project_l0_ball!(x, idx, k, buffer)
+    n = length(x)
+    # do nothing if k > length(x)
+    if k ≥ n return x end
     
-    #
-    #   fill with zeros if k ≤ 0
-    #
+    # fill with zeros if k ≤ 0
     if k ≤ 0 return fill!(x, 0) end
     
-    #
-    # find the spliting element
-    #
-    pivot = l0_search_partialsort!(idx, x, k)
-    
-    #
-    # apply the projection
-    #
-    kcount = 0
-    @inbounds for i in eachindex(x)
-        if abs(x[i]) <= abs(pivot) || kcount ≥ k
-            x[i] = 0
-        else
-            kcount += 1
-        end
+    # otherwise, find the spliting element
+    search_by_top_k = k < n-k+1
+    if search_by_top_k
+        _k = k
+        pivot = l0_search_partialsort!(idx, x, _k, true)
+    else
+        _k = n-k+1
+        pivot = l0_search_partialsort!(idx, x, _k, false)
     end
     
+    # preserve the top k elements
+    p = abs(pivot)
+    nonzero_count = 0
+    @inbounds for i in eachindex(x)
+        if abs(x[i]) < p
+            x[i] = 0
+        else
+            nonzero_count += 1
+        end
+    end
+
+    # resolve ties
+    if nonzero_count > k
+        start = _k
+        stop = _k
+        @inbounds for i in _k-1:-1:1
+            index = idx[i]
+            if x[index] != pivot
+                break
+            end
+            start = i
+        end
+        @inbounds for i in _k+1:1:n
+            index = idx[i]
+            if x[index] != pivot
+                break
+            end
+            stop = i
+        end
+        number_to_drop = nonzero_count - k
+        _buffer = view(buffer, 1:number_to_drop)
+        sample!(start:stop, _buffer, replace=false)
+        @inbounds for i in _buffer
+            index = idx[i]
+            x[index] = 0
+        end
+    end
+
     return x
 end
 
-function project_l0_ball!(X::AbstractMatrix, idx, scores, k; by::Union{Val{:row}, Val{:col}}=Val(:row))
+function project_l0_ball!(X::AbstractMatrix, idx, scores, k, buffer; by::Union{Val{:row}, Val{:col}}=Val(:row))
+    # determine structure of sparsity
     if by isa Val{:row}
         n = size(X, 1)
         itr = axes(X, 1)
@@ -50,24 +79,46 @@ function project_l0_ball!(X::AbstractMatrix, idx, scores, k; by::Union{Val{:row}
 
     # do nothing if k > length(x)
     if k ≥ n return X end
-    
+
     # fill with zeros if k ≤ 0
     if k ≤ 0 return fill!(X, 0) end
 
-    # map rows to a score used in ranking; here we use Euclidean norms
+    # otherwise, map rows to a score used in ranking and find the spliting element
     map!(f, scores, itr)
+    search_by_top_k = k < n-k+1
+    if search_by_top_k
+        _k = k
+        pivot = l0_search_partialsort!(idx, scores, _k, true)
+    else
+        _k = n-k+1
+        pivot = l0_search_partialsort!(idx, scores, _k, false)
+    end
 
-    # partially sort scores to find the top k rows
-    pivot = l0_search_partialsort!(idx, scores, k)
-
-    # apply the projection
-    kcount = 0
+    # preserve the top k elements
+    p = abs(pivot)
+    nonzero_count = 0
     @inbounds for (scoreᵢ, xᵢ) in zip(scores, itr2)
         # row is not in the top k
-        if scoreᵢ ≤ pivot || kcount ≥ k
+        if scoreᵢ < p
             fill!(xᵢ, 0)
         else # row is in the top k
-            kcount += 1
+            nonzero_count += 1
+        end
+    end
+
+    # resolve ties
+    if nonzero_count > k
+        number_to_drop = nonzero_count - k
+        _buffer = view(buffer, 1:number_to_drop)
+        _indexes_ = findall(s -> isequal(p, abs(s)), scores)
+        sample!(_indexes_, _buffer, replace=false)
+        @inbounds for i in _buffer
+            index = idx[i]
+            if by isa Val{:row}
+                @views fill!(X[index, :], 0)
+            elseif by isa Val{:col}
+                @views filL!(X[:, index], 0)
+            end
         end
     end
 
@@ -79,7 +130,7 @@ Search `x` for the pivot that splits the vector into the `k`-largest elements in
 
 The search preserves signs and returns `x[k]` after partially sorting `x`.
 """
-function l0_search_partialsort!(idx, x, k)
+function l0_search_partialsort!(idx, x, k, rev::Bool)
     #
     # Based on https://github.com/JuliaLang/julia/blob/788b2c77c10c2160f4794a4d4b6b81a95a90940c/base/sort.jl#L863
     # This eliminates a mysterious allocation of ~48 bytes per call for
@@ -93,44 +144,39 @@ function l0_search_partialsort!(idx, x, k)
     # Order arguments
     lt  = isless
     by  = abs
-    rev = true
+    # rev = true
     o = Base.Order.Forward
     order = Base.Order.Perm(Base.Sort.ord(lt, by, rev, o), x)
 
-    # Initialize the idx array; algorithm relies on idx[i] = i
-    @inbounds for i in eachindex(idx)
-        idx[i] = i
-    end
-
     # sort!(idx, lo, hi, PartialQuickSort(k), order)
     Base.Sort.Float.fpsort!(idx, PartialQuickSort(lo:hi), order)
-    
-    return x[idx[k+1]]
+
+    return x[idx[k]]
 end
 
 struct ApplyL0Projection <: Function
     idx::Vector{Int}
+    buffer::Vector{Int}
 
     function ApplyL0Projection(n::Int)
-        new(collect(1:n))
+        new(collect(1:n), Vector{Int}(undef, n))
     end
 end
 
-function (P::ApplyL0Projection)(x::AbstractVector, k)
-    project_l0_ball!(x, P.idx, k)
+function (P::ApplyL0Projection)(x, k)
+    project_l0_ball!(x, P.idx, k, P.buffer)
 end
 
 struct ApplyStructuredL0Projection <: Function
     idx::Vector{Int}
+    buffer::Vector{Int}
     scores::Vector{Float64}
 
     function ApplyStructuredL0Projection(n::Int)
-        idx = collect(1:n)
-        scores = zeros(n)
-        new(idx, scores)
+        new(collect(1:n), Vector{Int}(undef, n), Vector{Int}(undef, n))
     end
 end
 
 function (P::ApplyStructuredL0Projection)(X::AbstractMatrix, k)
-    project_l0_ball!(X, P.idx, P.scores, k, by=Val(:row))
+    project_l0_ball!(X, P.idx, P.scores, k, P.buffer, by=Val(:row))
 end

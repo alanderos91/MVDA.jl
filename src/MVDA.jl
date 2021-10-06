@@ -3,7 +3,7 @@ module MVDA
 using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using Parameters, Printf, MLDataUtils, ProgressMeter
-using LinearAlgebra, Random, Statistics, StableRNGs
+using LinearAlgebra, Random, Statistics, StatsBase, StableRNGs
 
 import Base: show, iterate
 
@@ -208,7 +208,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Real, extras=nothing, update
         end
                 
         # Update according to annealing schedule.
-        ρ = rhof(ρ, iter, rho_max)
+        ρ = ifelse(iter < nouter, rhof(ρ, iter, rho_max), ρ)
     end
     
     # Project solution to the constraint set.
@@ -343,6 +343,7 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
     at::Real=0.8,
     scoref::Function=DEFAULT_SCORE_FUNCTION,
     cb::Function=DEFAULT_CALLBACK,
+    progressbar::Bool=true,
     kwargs...
     )
     # Split data into cross-validation set and test set.
@@ -365,8 +366,10 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
     score = Array{typeof(tmp)}(undef, length(s_grid), length(ϵ_grid), nfolds)
 
     # Run cross-validation.
-    nvals = length(ϵ_grid) * length(s_grid)
-    progress_bar = Progress(nfolds*nvals, 1, "Running CV w/ $(algorithm)... ")
+    if progressbar
+        nvals = length(ϵ_grid) * length(s_grid)
+        progress_bar = Progress(nfolds*nvals, 1, "Running CV w/ $(algorithm)... ")
+    end
 
     for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
         # Retrieve the training set and validation set.
@@ -404,7 +407,9 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
                 score[i,j,k] = scoref(model, train_set, validation_set, test_set)
 
                 # Update the progress bar.
-                next!(progress_bar, showvalues=[(:fold, k), (:sparsity, s), (:ϵ, ϵ)])
+                if progressbar
+                    next!(progress_bar, showvalues=[(:fold, k), (:sparsity, s), (:ϵ, ϵ)])
+                end
             end
         end
     end
