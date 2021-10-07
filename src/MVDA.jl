@@ -106,6 +106,7 @@ end
 include("utilities.jl")
 include("projections.jl")
 include("problem.jl")
+include("simulation.jl")
 
 abstract type AbstractMMAlg end
 
