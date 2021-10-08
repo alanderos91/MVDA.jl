@@ -9,9 +9,10 @@ The following flags control how residuals are evaluated:
 **Note**: The values for each flag should be known at compile-time!
 """
 function __evaluate_residuals__(problem, ϵ, extras, need_main::Bool, need_dist::Bool, need_z::Bool)
-    @unpack Y, X, coeff, proj, res = problem
+    @unpack Y, coeff, proj, res = problem
     @unpack Z = extras
     T = floattype(problem)
+    X = get_design_matrix(problem)
 
     if need_main
         # main residuals, √(1/n) * (Y - X*B)
@@ -50,11 +51,13 @@ end
 Evaluate the gradiant of the regression problem. Assumes residuals have been evaluated.
 """
 function __evaluate_gradient__(problem, ρ, extras)
-    @unpack X, res, grad = problem
+    @unpack res, grad = problem
+    n, _, _ = probdims(problem)
+    X = get_design_matrix(problem)
 
     for j in eachindex(grad.dim)
         # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ bⱼI] * Rₘ,ⱼ
-        a = 1 / sqrt(size(X, 1))
+        a = 1 / sqrt(n)
         b = ρ
         mul!(grad.dim[j], X', res.weighted.dim[j])
         axpby!(-b, res.dist.dim[j], -a, grad.dim[j])
@@ -64,11 +67,13 @@ function __evaluate_gradient__(problem, ρ, extras)
 end
 
 function __evaluate_gradient_reg__(problem, λ, extras)
-    @unpack X, res, grad = problem
+    @unpack res, grad = problem
+    n, _, _ = probdims(problem)
+    X = get_design_matrix(problem)
 
     for j in eachindex(grad.dim)
         # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ λI] * Rₘ,ⱼ
-        a = 1 / sqrt(size(X, 1))
+        a = 1 / sqrt(n)
         mul!(grad.dim[j], X', res.weighted.dim[j])
         axpby!(λ, problem.coeff.dim[j], -a, grad.dim[j])
     end
@@ -131,7 +136,33 @@ end
 """
 Map a sparsity level `s` to an integer `k`, assuming `n` elements.
 """
-sparsity_to_k(s, n) = round(Int, n * (1-s))
+sparsity_to_k(problem::MVDAProblem, s) = round(Int, (size(problem.X, 2) - problem.intercept) * (1-s))
+sparsity_to_k(problem::NonLinearMVDAProblem, s) = round(Int, size(problem.X, 1) * (1-s))
+
+function get_projection_indices(problem::MVDAProblem)
+    _, p, _ = probdims(problem)
+    return 1:p
+end
+
+function get_projection_indices(problem::NonLinearMVDAProblem)
+    n, _, _ = probdims(problem)
+    return 1:n
+end
+
+"""
+Apply a projection to model coefficients.
+"""
+function apply_projection(projection, problem, k)
+    idx = get_projection_indices(problem)
+    @unpack coeff, proj = problem
+    copyto!(proj.all, coeff.all)
+
+    if problem.intercept
+        projection(view(proj.all, idx, :), k)
+    else
+        projection(proj.all, k)
+    end
+end
 
 """
 Define a geometric progression recursively by the rule

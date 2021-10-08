@@ -154,29 +154,29 @@ function l0_search_partialsort!(idx, x, k, rev::Bool)
     return x[idx[k]]
 end
 
-struct ApplyL0Projection <: Function
+struct L0Projection <: Function
     idx::Vector{Int}
     buffer::Vector{Int}
 
-    function ApplyL0Projection(n::Int)
+    function L0Projection(n::Int)
         new(collect(1:n), Vector{Int}(undef, n))
     end
 end
 
-function (P::ApplyL0Projection)(x, k)
+function (P::L0Projection)(x, k)
     project_l0_ball!(x, P.idx, k, P.buffer)
 end
 
-struct ApplyStructuredL0Projection <: Function
+struct StructuredL0Projection <: Function
     idx::Vector{Int}
     buffer::Vector{Int}
     scores::Vector{Float64}
 
-    function ApplyStructuredL0Projection(n::Int)
+    function StructuredL0Projection(n::Int)
         new(collect(1:n), Vector{Int}(undef, n), Vector{Int}(undef, n))
     end
 end
 
-function (P::ApplyStructuredL0Projection)(X::AbstractMatrix, k)
+function (P::StructuredL0Projection)(X::AbstractMatrix, k)
     project_l0_ball!(X, P.idx, P.scores, k, P.buffer, by=Val(:row))
 end

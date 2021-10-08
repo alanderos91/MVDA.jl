@@ -5,9 +5,11 @@ struct MMSVD <: AbstractMMAlg end
 
 # Initialize data structures.
 function __mm_init__(::MMSVD, problem, ::Nothing)
-    @unpack X, coeff = problem
+    @unpack coeff = problem
+    X = get_design_matrix(problem)
     n, p, c = probdims(problem)
     T = floattype(problem)
+    nparams = ifelse(problem isa MVDAProblem, p, n)
 
     # thin SVD of X
     U, s, V = __svd_wrapper__(X)
@@ -21,7 +23,7 @@ function __mm_init__(::MMSVD, problem, ::Nothing)
     Ψ = [Diagonal(Vector{T}(undef, r)) for _ in 1:c-1]
     
     return (;
-        apply_projection=ApplyStructuredL0Projection(p),
+        projection=StructuredL0Projection(nparams),
         U=U, s=s, V=V,
         Z=Z, Ψ=Ψ,
         buffer=buffer,
@@ -30,7 +32,7 @@ end
 
 # Check for data structure allocations; otherwise initialize.
 function __mm_init__(::MMSVD, problem, extras)
-    if :apply_projection in keys(extras) && :buffer in keys(extras) # TODO
+    if :projection in keys(extras) && :buffer in keys(extras) # TODO
         return extras
     else
         __mm_init__(MMSVD(), problem, nothing)
@@ -43,7 +45,7 @@ __mm_update_sparsity__(::MMSVD, problem, ϵ, ρ, k, extras) = nothing
 # Update data structures due to changing ρ.
 function __mm_update_rho__(::MMSVD, problem, ϵ, ρ, k, extras)
     @unpack s, Ψ = extras
-    n, p, c = probdims(problem)
+    n, _, _ = probdims(problem)
     a² = 1 / n
 
     # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
@@ -62,7 +64,7 @@ end
 # Update data structures due to changing λ.
 function __mm_update_lambda__(::MMSVD, problem, ϵ, λ, extras)
     @unpack s, Ψ = extras
-    n, p, c = probdims(problem)
+    n, _, _ = probdims(problem)
     a² = 1 / n
 
     # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
@@ -81,15 +83,13 @@ end
 # Apply one update.
 function __mm_iterate__(::MMSVD, problem, ϵ, ρ, k, extras)
     @unpack intercept, coeff, proj = problem
-    @unpack buffer, apply_projection = extras
+    @unpack buffer, projection = extras
     @unpack Z, Ψ, U, s, V = extras
-    n, p, c = probdims(problem)
     Σ = Diagonal(s)
     T = floattype(problem)
 
     # need to compute Z via residuals...
-    copyto!(proj.all, coeff.all)
-    apply_projection(view(proj.all, 1:p, :), k)
+    apply_projection(projection, problem, k)
     __evaluate_residuals__(problem, ϵ, extras, true, false, true)
 
     for j in eachindex(coeff.dim)
@@ -119,7 +119,6 @@ function __mm_iterate__(::MMSVD, problem, ϵ, λ, extras)
     @unpack buffer = extras
     @unpack Z, Ψ, U, s, V = extras
     Σ = Diagonal(s)
-    T = floattype(problem)
 
     # need to compute Z via residuals...
     __evaluate_residuals__(problem, ϵ, extras, true, false, true)

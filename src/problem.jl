@@ -139,6 +139,11 @@ Returns the floating point type used for model coefficients.
 floattype(::MVDAProblem{T}) where T = T
 
 """
+Return the design matrix, `X`, in the linear model `Y ∼ X * B`.
+"""
+get_design_matrix(problem::MVDAProblem) = problem.X
+
+"""
 Returns the number of samples, number of features, and number of categories, respectively.
 """
 probdims(problem::MVDAProblem) = size(problem.X, 1), size(problem.X, 2) - problem.intercept, length(problem.vertex)
@@ -163,6 +168,147 @@ function Base.show(io::IO, problem::MVDAProblem)
     matT = eltype(problem.X)
     labelT = keytype(problem.label2vertex)
     print(io, "MVDAProblem{$(T)}")
+    print(io, "\n  ∘ $(n) sample(s) ($(respT))")
+    print(io, "\n  ∘ $(p) feature(s) ($(matT))")
+    print(io, "\n  ∘ $(c) categories ($(labelT))")
+    print(io, "\n  ∘ intercept? $(problem.intercept)")
+end
+
+struct NonLinearMVDAProblem{T,KERNEL,matT,labelT,viewT,R1,R2,R3}
+    ##### data #####
+    Y::matT
+    X::matT
+    K::matT
+    vertex::Vector{Vector{T}}
+    label2vertex::Dict{labelT,Vector{T}}
+    vertex2label::Dict{Vector{T},labelT}
+    intercept::Bool
+
+    ##### model #####
+    κ::KERNEL
+    coeff::Coefficients{matT,viewT}
+    coeff_prev::Coefficients{matT,viewT}
+    
+    ##### quadratic surrogate #####
+    proj::Coefficients{matT,viewT}
+    res::Residuals{R1,R2,R3}
+    grad::Coefficients{matT,viewT}
+end
+
+function NonLinearMVDAProblem{T}(Y, X, K, vertex, label2vertex, vertex2label, intercept, κ, coeff, coeff_prev, proj, res, grad) where T <: Real
+    # get type parameters
+    KERNEL = typeof(κ)
+    matT = typeof(Y)
+    labelT = keytype(label2vertex)
+    viewT = typeof(coeff.dim)
+    R1 = typeof(res.main)
+    R2 = typeof(res.dist)
+    R3 = typeof(res.weighted)
+    
+    NonLinearMVDAProblem{T,KERNEL,matT,labelT,viewT,R1,R2,R3}(
+        Y, X, K, vertex, label2vertex, vertex2label, intercept,
+        κ, coeff, coeff_prev,
+        proj, res, grad,
+    )
+end
+
+function NonLinearMVDAProblem(κ::Kernel, labels, X; intercept=true)
+    # modify data in case intercept is used
+    K = kernelmatrix(κ, X, obsdim=1)
+    if intercept
+        K = [K ones(size(K, 1))]
+    end
+
+    # get problem info
+    class = unique(labels)
+    (n, p), c = size(X), length(class)
+    T = Float64 # TODO
+
+    # encode labels into vertices
+    a = ( 1 + sqrt(c) ) / ( (c-1)^(3/2) )
+    b = sqrt( c / (c-1) )
+    vertex = Vector{Vector{T}}(undef, c)
+
+    vertex[1] = 1 / sqrt(c-1) * ones(c-1)
+    for j in 2:c
+        v = -a * ones(c-1)
+        v[j-1] += b
+        vertex[j] = v
+    end
+
+    # assign classes to vertices and create response matrix
+    label2vertex = Dict(class_j => vertex[j] for (j, class_j) in enumerate(class))
+    vertex2label = Dict(vertex[j] => class_j for (j, class_j) in enumerate(class))
+    Y = Matrix{T}(undef, n, c-1)
+    for (i, label_i) in enumerate(labels)
+        Y[i,:] .= label2vertex[label_i]
+    end
+
+    # allocate data structures for coefficients, projections, residuals, and gradient
+    coeff = __allocate_coeff__(T, n+intercept, c)
+    coeff_prev = __allocate_coeff__(T, n+intercept, c)
+    proj = __allocate_coeff__(T, n+intercept, c)
+    res = __allocate_res__(T, n, n+intercept, c)
+    grad = __allocate_coeff__(T, n+intercept, c)
+
+    return NonLinearMVDAProblem{T}(
+        Y, X, K, vertex, label2vertex, vertex2label, intercept,
+        κ, coeff, coeff_prev,
+        proj, res, grad,
+    )
+end
+
+"""
+Returns the floating point type used for model coefficients.
+"""
+floattype(::NonLinearMVDAProblem{T}) where T = T
+
+"""
+Return the design matrix, `K`, in the linear model `Y ∼ K * Γ`.
+"""
+get_design_matrix(problem::NonLinearMVDAProblem) = problem.K
+
+"""
+Returns the number of samples, number of features, and number of categories, respectively.
+"""
+probdims(problem::NonLinearMVDAProblem) = size(problem.X, 1), size(problem.X, 2), length(problem.vertex)
+
+function predict(problem::NonLinearMVDAProblem, x::AbstractVector)
+    n, _, c = probdims(problem)
+    κ = problem.κ
+    Γ = problem.coeff.all
+    ϕ = zeros(c-1)
+
+    for j in eachindex(ϕ)
+        for (i, xᵢ) in enumerate(eachrow(problem.X))
+            ϕ[j] += Γ[i,j] * κ(xᵢ, x)
+        end
+        ϕ[j] += ifelse(problem.intercept, Γ[end,j], zero(ϕ[j]))
+    end
+
+    return ϕ
+end
+
+predict(problem::NonLinearMVDAProblem, X::AbstractMatrix) = map(xᵢ -> predict(problem, xᵢ), eachrow(X))
+
+function classify(problem::NonLinearMVDAProblem, x::AbstractVector)
+    y = predict(problem, x)
+    v = problem.vertex
+    distances = [norm(y - v[j]) for j in eachindex(v)]
+    j = argmin(distances)
+    return problem.vertex2label[v[j]]
+end
+
+classify(problem::NonLinearMVDAProblem, X::AbstractMatrix) = map(xᵢ -> classify(problem, xᵢ), eachrow(X))
+
+function Base.show(io::IO, problem::NonLinearMVDAProblem)
+    n, p, c = probdims(problem)
+    T = floattype(problem)
+    respT = eltype(problem.Y)
+    matT = eltype(problem.X)
+    labelT = keytype(problem.label2vertex)
+    print(io, "NonLinearMVDAProblem{$(T)}")
+    print(io, "\n  ∘ $(typeof(problem.κ))")
     print(io, "\n  ∘ $(n) sample(s) ($(respT))")
     print(io, "\n  ∘ $(p) feature(s) ($(matT))")
     print(io, "\n  ∘ $(c) categories ($(labelT))")

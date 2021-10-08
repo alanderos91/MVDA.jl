@@ -4,6 +4,7 @@ using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using Parameters, Printf, MLDataUtils, ProgressMeter
 using LinearAlgebra, Random, Statistics, StatsBase, StableRNGs
+using KernelFunctions
 
 import Base: show, iterate
 
@@ -103,9 +104,9 @@ end
 
 ##### IMPLEMENTATION #####
 
+include("problem.jl")
 include("utilities.jl")
 include("projections.jl")
-include("problem.jl")
 include("simulation.jl")
 
 abstract type AbstractMMAlg end
@@ -168,11 +169,10 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Real, extras=nothing, update
 
     # Get problem info and extra data structures.
     @unpack intercept, coeff, coeff_prev, proj = problem
-    @unpack apply_projection = extras
-    n, p, c = probdims(problem)
+    @unpack projection = extras
     
     # Fix model size(s).
-    k = sparsity_to_k(s, p)
+    k = sparsity_to_k(problem, s)
 
     # Initialize ρ and iteration count.
     ρ = rho_init
@@ -183,8 +183,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Real, extras=nothing, update
     update_extras[2] && __mm_update_rho__(algorithm, problem, ϵ, ρ, k, extras)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    copyto!(proj.all, coeff.all)
-    apply_projection(view(proj.all, 1:p, :), k)
+    apply_projection(projection, problem, k)
     init_result = __evaluate_objective__(problem, ϵ, ρ, extras)
     result = SubproblemResult(0, init_result)
     cb(0, problem, ϵ, ρ, k, result)
@@ -213,8 +212,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, s::Real, extras=nothing, update
     end
     
     # Project solution to the constraint set.
-    copyto!(proj.all, coeff.all)
-    apply_projection(view(proj.all, 1:p, :), k)
+    apply_projection(projection, problem, k)
     loss, obj, dist, gradsq = __evaluate_objective__(problem, ϵ, ρ, extras)
 
     if verbose
@@ -267,19 +265,17 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Real, extras=nothi
 
     # Get problem info and extra data structures.
     @unpack intercept, coeff, coeff_prev, proj = problem
-    @unpack apply_projection = extras
-    n, p, c = probdims(problem)
+    @unpack projection = extras
 
     # Fix model size(s).
-    k = sparsity_to_k(s, p)
+    k = sparsity_to_k(problem, s)
 
     # Update data structures due to hyperparameters.
     update_extras[1] && __mm_update_sparsity__(algorithm, problem, ϵ, ρ, k, extras)
     update_extras[2] && __mm_update_rho__(algorithm, problem, ϵ, ρ, k, extras)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    copyto!(proj.all, coeff.all)
-    apply_projection(view(proj.all, 1:p, :), k)
+    apply_projection(projection, problem, k)
     result = __evaluate_objective__(problem, ϵ, ρ, extras)
     cb(0, problem, ϵ, ρ, k, result)
     old = result.objective
@@ -301,8 +297,7 @@ function fit_MVDA!(algorithm, problem, ϵ::Real, ρ::Real, s::Real, extras=nothi
         __mm_iterate__(algorithm, problem, ϵ, ρ, k, extras)
 
         # Update loss, objective, distance, and gradient.
-        copyto!(proj.all, coeff.all)
-        apply_projection(view(proj.all, 1:p, :), k)
+        apply_projection(projection, problem, k)
         result = __evaluate_objective__(problem, ϵ, ρ, extras)
 
         cb(iter, problem, ϵ, ρ, k, result)
@@ -447,7 +442,6 @@ function fit_regMVDA!(algorithm, problem, ϵ, λ, extras=nothing, update_extras:
 
     # Get problem info and extra data structures.
     @unpack intercept, coeff, coeff_prev, proj = problem
-    n, p, c = probdims(problem)
 
     update_extras && __mm_update_lambda__(algorithm, problem, ϵ, λ, extras)
 
@@ -551,7 +545,7 @@ function fit_MVDA(algorithm::CyclicVDA, problem, ϵ, δ, λ₁, λ₂;
 end
 
 export IterationResult, SubproblemResult
-export MVDAProblem, SD, MMSVD, CyclicVDA
+export MVDAProblem, NonLinearMVDAProblem, SD, MMSVD, CyclicVDA
 export fit_MVDA, fit_MVDA!, cv_MVDA, fit_regMVDA, fit_regMVDA!
 
 end

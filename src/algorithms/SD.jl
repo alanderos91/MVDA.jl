@@ -6,14 +6,15 @@ struct SD <: AbstractMMAlg end
 # Initialize data structures.
 function __mm_init__(::SD, problem, ::Nothing)
     @unpack X, coeff = problem
-    n, p, c = probdims(problem)
+    n, p, _ = probdims(problem)
     T = floattype(problem)
+    nparams = ifelse(problem isa MVDAProblem, p, n)
 
     # residuals subroutine requires an object named Z; need to fix
     Z = nothing
 
     return (;
-        apply_projection=ApplyStructuredL0Projection(p), Z=Z,
+        apply_projection=ApplyStructuredL0Projection(nparams), Z=Z,
     )
 end
 
@@ -37,14 +38,14 @@ __mm_update_lambda__(::SD, problem, ϵ, λ, extras) = nothing
 
 # Apply one update.
 function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
-    @unpack X, coeff, proj, grad, res = problem
+    @unpack coeff, proj, grad, res = problem
     @unpack apply_projection = extras
-    n, p, c = probdims(problem)
+    X = get_design_matrix(problem)
+    n, _, _ = probdims(problem)
     T = floattype(problem)
 
     # Project and then evaluate gradient.
-    copyto!(proj.all, coeff.all)
-    apply_projection(view(proj.all, 1:p, :), k)
+    apply_projection(projection, problem, k)
     __evaluate_residuals__(problem, ϵ, extras, true, true, false)
     __evaluate_gradient__(problem, ρ, extras)
 
@@ -74,8 +75,9 @@ end
 
 # Apply one update in regularized version.
 function __mm_iterate__(::SD, problem, ϵ, λ, extras)
-    @unpack X, coeff, proj, grad, res = problem
-    n, p, c = probdims(problem)
+    @unpack coeff, proj, grad, res = problem
+    X = get_design_matrix(problem)
+    n, _, _ = probdims(problem)
     T = floattype(problem)
 
     # Evaluate gradient.
