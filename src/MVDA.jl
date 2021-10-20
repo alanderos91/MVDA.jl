@@ -347,7 +347,7 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
     cv_set, test_set = splitobs((Y, X), at=at, obsdim=1)
 
     # Initialize model object; just used to pass around coefficients.
-    n, p, c = probdims(problem)
+    _, p, c = probdims(problem)
     T = floattype(problem)
     model = MVDAProblem{T}(Y, X, problem.vertex, problem.label2vertex, problem.vertex2label, problem.intercept,
         deepcopy(problem.coeff), deepcopy(problem.coeff_prev),
@@ -387,7 +387,7 @@ function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
             copyto!(train_problem.coeff.all, init_coeff)
 
             for (i, s) in enumerate(s_grid)
-                model_size = sparsity_to_k(s, p)
+                model_size = sparsity_to_k(problem, s)
 
                 # Update data structures due to change in sparsity.
                 __mm_update_sparsity__(algorithm, problem, ϵ, one(T), model_size, extras)
