@@ -66,3 +66,22 @@ function generate_waveform(n::Int, p::Int; m::Int=6, r::Int=4, s::Int=11, rng::A
 
     return class, X
 end
+
+function simulate_WS2007(n::Int, p::Int, c::Int, nsamples::Int, d::Real; rng::AbstractRNG=StableRNG(1234))
+    # simulate 3 classes with single predictor as in Wang and Shen 2007
+    X = randn(rng, n, p)
+    for i in 1:c
+        idx = nsamples*(i-1)+1:nsamples*i
+        a₁ = d * cos(2*(π/6 + (i-1)*π/c))
+        a₂ = d * sin(2*(π/6 + (i-1)*π/c))
+        X[idx,1] .+= a₁
+        X[idx,2] .+= a₂
+    end
+    targets = zeros(Int, n)
+    for j in 1:c
+        targets[nsamples*(j-1)+1:nsamples*j] .= j
+    end
+    idx = randperm(rng, n)
+    targets, X = targets[idx], X[idx,:]
+    return targets, X
+end
