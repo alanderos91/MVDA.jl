@@ -49,6 +49,7 @@ function run_experiment(n, p, c, nsamples)
     for (j, d) in enumerate(d_vals)
         for ii in 1:N
             targets, X = MVDA.simulate_WS2007(n, p, c, nsamples, d)
+            X .= (X .- mean(X, dims=1)) ./ std(X, dims=1)
 
             problem = MVDAProblem(targets, X, intercept=true)
             extras = MVDA.__mm_init__(MMSVD(), problem, nothing)
