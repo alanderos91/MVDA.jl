@@ -14,13 +14,13 @@ function __mm_init__(::SD, problem, ::Nothing)
     Z = nothing
 
     return (;
-        apply_projection=ApplyStructuredL0Projection(nparams), Z=Z,
+    projection=StructuredL0Projection(nparams), Z=Z,
     )
 end
 
 # Check for data structure allocations; otherwise initialize.
 function __mm_init__(::SD, problem, extras)
-    if :apply_projection in keys(extras) && :Z in keys(extras) # TODO
+    if projection in keys(extras) && :Z in keys(extras) # TODO
         return extras
     else
         __mm_init__(SD(), problem, nothing)
@@ -39,7 +39,7 @@ __mm_update_lambda__(::SD, problem, ϵ, λ, extras) = nothing
 # Apply one update.
 function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
     @unpack coeff, proj, grad, res = problem
-    @unpack apply_projection = extras
+    @unpack projection = extras
     X = get_design_matrix(problem)
     n, _, _ = probdims(problem)
     T = floattype(problem)
