@@ -1,40 +1,61 @@
-using MVDA, Plots, Statistics, Random, LinearAlgebra, CSV, DataFrames
+using MVDA, Plots, Statistics, StatsBase, Random, LinearAlgebra, CSV, DataFrames
 using ProgressMeter
 
 # helper functions for evaluating misclassification errors
-get_average_score(result, i) = map(x -> x[i], dropdims(mean(result.score, dims=3), dims=(2,3)))
+function get_average_score(result, i)
+    tmp = map(x -> x[i], result.score)
+    dropdims(mean(tmp, dims=3), dims=(2,3))
+end
+
 function get_std_score(result, i)
     tmp = map(x -> x[i], result.score)
     dropdims(std(tmp, dims=3), dims=(2,3))
 end
 
-function run_example(rng::AbstractRNG, filename, title, targets, X, nreplicates::Int, sparse2dense::Bool)
-    # Load data and create problem instance.
-    X .= (X .- mean(X, dims=1)) ./ std(X, dims=1)
+function standardize!(X)
+    F = fit(ZScoreTransform, X, dims=1)
+    StatsBase.transform!(F, X)
+end
 
-    # Extract problem info and set deadzone radius to maximal value.
-    problem = MVDAProblem(targets, X, intercept=true)
+_permute!(x::AbstractVector, idx) = permute!(x, idx)
+_permuterows!(X::AbstractMatrix, idx) = foreach(row -> _permute!(row, idx), eachrow(X))
+_permutecols!(X::AbstractMatrix, idx) = foreach(col -> _permute!(col, idx), eachcol(X))
+
+function make_vertex_matrix!(Y, problem, labels)
+    label2vertex = problem.label2vertex
+    for (i, label_i) in enumerate(labels)
+        Y[i,:] .= label2vertex[label_i]
+    end
+    return Y
+end
+
+function run_example(rng::AbstractRNG, filename, title, cv_set, test_set, nreplicates::Int, s_grid, sparse2dense::Bool; kwargs...)
+    # Create problem and set dead zone radius to maximal value.
+    problem = MVDAProblem(cv_set[1], cv_set[2], intercept=true)
     n, p, c = MVDA.probdims(problem)
     ϵ = ifelse(c == 2, 0.5, 0.5 * sqrt(2*c/(c-1)))
 
+    ntest = length(test_set[1])
+    CV_Y = make_vertex_matrix!(Matrix{Float64}(undef, n, c-1), problem, cv_set[1])
+    CV_X = problem.X
+    T_Y  = make_vertex_matrix!(Matrix{Float64}(undef, ntest, c-1), problem, test_set[1])
+    T_X  = problem.intercept ? [test_set[2] ones(ntest)] : test_set[2]
+
     # Create grid for CV.
     ϵ_grid = [ϵ]
-    s_grid = [1-k/p for k in p:-1:0]
-    if sparse2dense sort!(s_grid, rev=true) end
+    sort!(s_grid, rev=sparse2dense)
 
     # Allocate permutation vector and paths
-    idx = similar(Vector{Int}, axes(X, 1))
+    idx = Vector{Int}(undef, n)
     cvpath = Vector{Vector{Vector{Float64}}}(undef, nreplicates)
     selected_sparsity = Vector{Float64}(undef, nreplicates)
 
     # Repeat CV multiple times to estimate statistical properties of errors.
-    # println("Example $(dataset); n=$(n), p=$(p), c=$(c)")
     t = @elapsed @showprogress "Example: $(filename) " for r in 1:nreplicates
         # Shuffle data samples.
         randperm!(rng, idx)
-        problem.X .= problem.X[idx, :]
-        problem.Y .= problem.Y[idx, :]
-        targets .= targets[idx]
+        _permutecols!(CV_Y, idx)
+        _permutecols!(CV_X, idx)
     
         # Compute initial solution using regularization.
         if sparse2dense # sparse -> dense
@@ -43,20 +64,11 @@ function run_example(rng::AbstractRNG, filename, title, targets, X, nreplicates:
         else # dense -> sparse
             fill!(problem.coeff.all, 1/p)
             @views copyto!(problem.coeff.all[end, :], mean(problem.Y, dims=1))
-            # fit_regMVDA(MMSVD(), problem, ϵ, 1.0, gtol=1e-12)
         end
     
-        # Run 3-fold cross-validation.
-        # println("Replicate $(r)")
-        result = cv_MVDA(MMSVD(), problem, ϵ_grid, s_grid,
-            nouter=10^2,
-            inner=10^4,
-            nfolds=3,
-            gtol=1e-8,
-            dtol=1e-6,
-            rtol=0.0,
-            nesterov_threshold=100,
-            progressbar=false,
+        # Run cross-validation.
+        result = cv_MVDA(MMSVD(), problem, (CV_Y, CV_X), (T_Y, T_X), ϵ_grid, s_grid;
+            progressbar=false, kwargs...
         )
 
         # Get estimates of training, validation, and test set errors.
@@ -113,14 +125,13 @@ function run_example(rng::AbstractRNG, filename, title, targets, X, nreplicates:
     plot!(fig, title=title, framestyle=:none, subplot=1)
     for i in 1:3
         a = avg_model
-        j = searchsortedlast(sort(xs), a)
-        j = ifelse(sparse2dense, length(xs)-j+1, j)
+        j = ifelse(sparse2dense, findfirst(≤(a), xs), findlast(≤(a), xs))
         b = avg_score[i][j]
-        arnd = round(a, sigdigits=3)
-        brnd = round(b, sigdigits=3)
+        arnd = round(a, sigdigits=4)
+        brnd = round(b, sigdigits=4)
         plot!(fig, xs, avg_score[i], ribbon=std_score[i], lw=1, subplot=i+1)
-        scatter!(fig, (a, b), xerr=std_model, marker=:cross, color=:black, markersize=8, subplot=i+1)
-        annotate!(fig, [(a, brnd+20, ("($(arnd), $(brnd))", 12, :center))], subplot=i+1)
+        scatter!(fig, (a, b), xerr=std_model, marker=:x, color=:black, markersize=8, subplot=i+1)
+        annotate!(fig, [(a, brnd+20, ("($(arnd), $(brnd))", 10, :center))], subplot=i+1)
     end
     savefig(fig, "~/Desktop/VDA/$(filename)-summaryA.png")
 
@@ -130,14 +141,13 @@ function run_example(rng::AbstractRNG, filename, title, targets, X, nreplicates:
     plot!(fig, title=title, framestyle=:none, subplot=1)
     for i in 1:3
         a = med_model
-        j = searchsortedlast(sort(xs), a)
-        j = ifelse(sparse2dense, length(xs)-j+1, j)
+        j = ifelse(sparse2dense, findfirst(≤(a), xs), findlast(≤(a), xs))
         b = med_score[i][j]
-        arnd = round(a, sigdigits=3)
-        brnd = round(b, sigdigits=3)
+        arnd = round(a, sigdigits=4)
+        brnd = round(b, sigdigits=4)
         plot!(fig, xs, med_score[i], ribbon=(qt1_score[i], qt3_score[i]), lw=1, subplot=i+1)
-        scatter!(fig, (a, b), xerr=([qt1_model], [qt3_model]), marker=:cross, color=:black, markersize=8, subplot=i+1)
-        annotate!(fig, [(a, brnd+20, ("($(arnd), $(brnd))", 12, :center))], subplot=i+1)
+        scatter!(fig, (a, b), xerr=([qt1_model], [qt3_model]), marker=:x, color=:black, markersize=8, subplot=i+1)
+        annotate!(fig, [(a, brnd+20, ("($(arnd), $(brnd))", 10, :center))], subplot=i+1)
     end
     savefig(fig, "~/Desktop/VDA/$(filename)-summaryB.png")
 

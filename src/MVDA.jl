@@ -323,30 +323,25 @@ end
 
 """
 ```
-cv_MVDA(algorithm, problem, ϵ_grid, s_grid; kwargs...)
+cv_MVDA(algorithm, problem, test_set, ϵ_grid, s_grid; kwargs...)
 ```
 
 Compute scores for multiple models parameterized by hyperparameters `s` and `ϵ` via K-fold cross-validation.
 
-- `problem` should enter with an initial guess for model parameters (i.e. in `problem.coeff`).
+- `problem` contains data for cross-validation and should enter with an initial guess for model parameters (i.e. in `problem.coeff`).
+- `test_set` is separate from the cross-validation data.
 - `ϵ_grid` should be an increasing sequence of nonnegative values.
 - `s_grid` should be an increasing sequence of sparsity values (dense to sparse) between 0 and 1.
-
-The default scoring function evaluates the loss, `MSE(y, X*β) + λ * MSE(β,Z*α)`, on the training, validation, and test sets.
 """
-function cv_MVDA(algorithm, problem, ϵ_grid, s_grid;
+function cv_MVDA(algorithm, problem, cv_set, test_set, ϵ_grid, s_grid;
     nfolds::Int=10,
-    at::Real=0.8,
     scoref::Function=DEFAULT_SCORE_FUNCTION,
     cb::Function=DEFAULT_CALLBACK,
     progressbar::Bool=true,
     kwargs...
     )
-    # Split data into cross-validation set and test set.
-    @unpack Y, X = problem
-    cv_set, test_set = splitobs((Y, X), at=at, obsdim=1)
-
     # Initialize model object; just used to pass around coefficients.
+    @unpack Y, X = problem
     _, p, c = probdims(problem)
     T = floattype(problem)
     model = MVDAProblem{T}(Y, X, problem.vertex, problem.label2vertex, problem.vertex2label, problem.intercept,
