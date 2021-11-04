@@ -333,7 +333,7 @@ Compute scores for multiple models parameterized by hyperparameters `s` and `ϵ`
 - `ϵ_grid` should be an increasing sequence of nonnegative values.
 - `s_grid` should be an increasing sequence of sparsity values (dense to sparse) between 0 and 1.
 """
-function cv_MVDA(algorithm, problem, cv_set, test_set, ϵ_grid, s_grid;
+function cv_MVDA(algorithm, problem::MVDAProblem, cv_set, test_set, ϵ_grid, s_grid;
     nfolds::Int=10,
     scoref::Function=DEFAULT_SCORE_FUNCTION,
     cb::Function=DEFAULT_CALLBACK,
@@ -382,20 +382,88 @@ function cv_MVDA(algorithm, problem, cv_set, test_set, ϵ_grid, s_grid;
             copyto!(train_problem.coeff.all, init_coeff)
 
             for (i, s) in enumerate(s_grid)
-                model_size = sparsity_to_k(problem, s)
+                # model_size = sparsity_to_k(problem, s)
 
                 # Update data structures due to change in sparsity.
-                __mm_update_sparsity__(algorithm, problem, ϵ, one(T), model_size, extras)
+                # __mm_update_sparsity__(algorithm, problem, ϵ, one(T), model_size, extras)
 
                 # Obtain solution as function of (s, ϵ).
-                result = fit_MVDA!(algorithm, train_problem, ϵ, s, extras, (false, false,); cb=cb, kwargs...)
+                r = fit_MVDA!(algorithm, train_problem, ϵ, s, extras, (false, false,); cb=cb, kwargs...)
                 copyto!(model.coeff.all, train_problem.coeff.all)
                 copyto!(model.proj.all, train_problem.proj.all)
 
-                cb(k, problem, train_problem, (train_set, validation_set, test_set), ϵ, s, model_size, result)
+                # cb(k, problem, train_problem, (train_set, validation_set, test_set), ϵ, s, model_size, r)
 
                 # Evaluate the solution.
                 score[i,j,k] = scoref(model, train_set, validation_set, test_set)
+
+                # Update the progress bar.
+                if progressbar
+                    next!(progress_bar, showvalues=[(:fold, k), (:sparsity, s), (:ϵ, ϵ)])
+                end
+            end
+        end
+    end
+
+    # Package the result.
+    result = (;
+        epsilon=ϵ_grid,
+        sparsity=s_grid,
+        score=score,
+    )
+
+    return result
+end
+
+function cv_MVDA(algorithm, problem::NonLinearMVDAProblem, cv_set, test_set, ϵ_grid, s_grid;
+    nfolds::Int=10,
+    scoref::Function=DEFAULT_SCORE_FUNCTION,
+    cb::Function=DEFAULT_CALLBACK,
+    progressbar::Bool=true,
+    kwargs...
+    )
+    # Initialize model object; just used to pass around coefficients.
+    @unpack Y, X = problem
+    _, p, c = probdims(problem)
+    T = floattype(problem)
+
+    # Initialize the output.
+    tmp = scoref(problem, test_set, test_set, test_set)
+    score = Array{typeof(tmp)}(undef, length(s_grid), length(ϵ_grid), nfolds)
+
+    # Run cross-validation.
+    if progressbar
+        nvals = length(ϵ_grid) * length(s_grid)
+        progress_bar = Progress(nfolds*nvals, 1, "Running CV w/ $(algorithm)... ")
+    end
+
+    for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
+        # Retrieve the training set and validation set.
+        train_set, validation_set = fold
+        train_Y, train_X = train_set
+        train_n = size(train_Y, 1)
+        
+        # Create a problem object for the training set.
+        train_problem = remake(problem, copy(train_Y), copy(train_X))
+        extras = __mm_init__(algorithm, train_problem, nothing)
+
+        # Select correct subset of initial model parameters.
+        init_coeff = @view problem.coeff.all[1:train_n, :]
+        init_intercept = @view problem.coeff.all[end, :]
+
+        for (j, ϵ) in enumerate(ϵ_grid)
+            # Set initial model parameters.
+            @views begin
+                copyto!(train_problem.coeff.all[1:train_n, :], init_coeff)
+                copyto!(train_problem.coeff.all[end, :], init_intercept)
+            end
+
+            for (i, s) in enumerate(s_grid)
+                # Obtain solution as function of (s, ϵ).
+                r = fit_MVDA!(algorithm, train_problem, ϵ, s, extras, (false, false,); cb=cb, kwargs...)
+                
+                # Evaluate the solution.
+                score[i,j,k] = scoref(train_problem, train_set, validation_set, test_set)
 
                 # Update the progress bar.
                 if progressbar

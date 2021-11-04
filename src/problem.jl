@@ -258,6 +258,34 @@ function NonLinearMVDAProblem(κ::Kernel, labels, X; intercept=true)
     )
 end
 
+function remake(problem::NonLinearMVDAProblem, Y, X)
+    # extract encoding-dependent fields
+    @unpack vertex, label2vertex, vertex2label, intercept, κ = problem
+
+    # modify data in case intercept is used
+    K = kernelmatrix(κ, X, obsdim=1)
+    if intercept
+        K = [K ones(size(K, 1))]
+    end
+
+    # get problem info
+    (n, p), c = size(X), length(vertex)
+    T = floattype(problem)
+
+    # allocate data structures for coefficients, projections, residuals, and gradient
+    coeff = __allocate_coeff__(T, n+intercept, c)
+    coeff_prev = __allocate_coeff__(T, n+intercept, c)
+    proj = __allocate_coeff__(T, n+intercept, c)
+    res = __allocate_res__(T, n, n+intercept, c)
+    grad = __allocate_coeff__(T, n+intercept, c)
+
+    return NonLinearMVDAProblem{T}(
+        Y, X, K, vertex, label2vertex, vertex2label, intercept,
+        κ, coeff, coeff_prev,
+        proj, res, grad,
+    )
+end
+
 """
 Returns the floating point type used for model coefficients.
 """
