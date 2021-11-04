@@ -5,7 +5,11 @@ N = 50
 file = "/home/alanderos/Desktop/VDA/cancer-timings.txt"
 isfile(file) && rm(file)
 open(file, "a") do io
-    println(io, "replicates,dataset,sparse2dense,time")
+    s_str = subheader("s")
+    TR_str = subheader("train")
+    V_str = subheader("validation")
+    T_str = subheader("test")
+    println(io, "replicates,dataset,sparse2dense,time,$(s_str),$(TR_str),$(V_str),$(T_str)")
 end
 
 run = function(fname, title, cv_set, test_set, s_grid, sparse2dense)
@@ -20,8 +24,7 @@ run = function(fname, title, cv_set, test_set, s_grid, sparse2dense)
     )
 end
 
-# for dataset in ("colon", "srbctA", "leukemiaA", "lymphomaA", "brain", "prostate",)
-for dataset in ("brain", "prostate",)
+for dataset in ("colon", "srbctA", "leukemiaA", "lymphomaA", "brain", "prostate",)
     df = CSV.read("/home/alanderos/Desktop/data/$(dataset).DAT", DataFrame, header=false)
     data = (Vector(df[!,end]), Matrix{Float64}(df[!,1:end-1]))
     ((n, p), c) = size(data[2]), length(unique(data[1]))
@@ -34,11 +37,11 @@ for dataset in ("brain", "prostate",)
     (cv_set, test_set) = splitobs(data, at=0.8, obsdim=1)
     filename = dataset
     title = "$(dataset) / $(n) samples / $(p) features / $(c) classes"
-    t1 = run("$(filename)-path=D2S", title, cv_set, test_set, s_grid, false) # dense -> sparse
-    t2 = run("$(filename)-path=S2D", title, cv_set, test_set, s_grid, true) # sparse -> dense
+    t1, s1, TR1, V1, T1 = run("$(filename)-path=D2S", title, cv_set, test_set, s_grid, false)   # dense -> sparse
+    t2, s2, TR2, V2, T2 = run("$(filename)-path=S2D", title, cv_set, test_set, s_grid, true)    # sparse -> dense
 
     open(file, "a") do io
-        println(io, N, ",", dataset, ",", false, ",", t1)
-        println(io, N, ",", dataset, ",", true, ",", t2)
+        println(io, N,",",dataset,",",false,",",t1,",",join(s1,','),",",join(TR1,','),",",join(V1,','),",",join(T1,','))
+        println(io, N,",",dataset,",",true,",",t2,",",join(s2,','),",",join(TR2,','),",",join(V2,','),",",join(T2,','))
     end
 end
