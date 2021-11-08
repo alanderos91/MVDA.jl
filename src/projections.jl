@@ -117,7 +117,7 @@ function project_l0_ball!(X::AbstractMatrix, idx, scores, k, buffer; by::Union{V
             if by isa Val{:row}
                 @views fill!(X[index, :], 0)
             elseif by isa Val{:col}
-                @views filL!(X[:, index], 0)
+                @views fill!(X[:, index], 0)
             end
         end
     end
@@ -173,7 +173,7 @@ struct StructuredL0Projection <: Function
     scores::Vector{Float64}
 
     function StructuredL0Projection(n::Int)
-        new(collect(1:n), Vector{Int}(undef, n), Vector{Int}(undef, n))
+        new(collect(1:n), Vector{Int}(undef, n), Vector{Float64}(undef, n))
     end
 end
 
