@@ -2,7 +2,7 @@ using MVDA, Plots, Statistics, StatsBase, Random, LinearAlgebra, CSV, DataFrames
 using ProgressMeter
 
 function subheader(str)
-    join(map(s -> string(str,"_",s), ("avg", "std", "med", "qt1", "qt3")), ',')
+    join(map(s -> string(str,"_",s), ("avg", "std", "med", "clo", "chi")), ',')
 end
 
 # helper functions for evaluating misclassification errors
@@ -89,17 +89,20 @@ function run_example(rng::AbstractRNG, filename, title, cv_set, test_set, nrepli
 
     # Average CV errors & sparsity over replicates.
     avg_score = mean(cvpath)
-    std_score = map(i -> std(map(x -> x[i], cvpath)), 1:3) ./ sqrt(nreplicates)
+    std_score = map(i -> std(map(x -> x[i], cvpath)), 1:3)
     avg_model = mean(selected_sparsity)
-    std_model = std(selected_sparsity) ./ sqrt(nreplicates)
+    std_model = std(selected_sparsity)
     
     # Median CV errors & sparsity over replicates
+    credibility = 19//20
+    α = (1-credibility)/2
+
     med_score = map(i -> [median(map(x -> x[i][j], cvpath)) for j in eachindex(s_grid)], 1:3)
-    qt1_score = med_score .- map(i -> [quantile(map(x -> x[i][j], cvpath), 1//4) for j in eachindex(s_grid)], 1:3)
-    qt3_score = map(i -> [quantile(map(x -> x[i][j], cvpath), 3//4) for j in eachindex(s_grid)], 1:3) .- med_score
+    clo_score = map(i -> [quantile(map(x -> x[i][j], cvpath), α) for j in eachindex(s_grid)], 1:3)
+    chi_score = map(i -> [quantile(map(x -> x[i][j], cvpath), 1-α) for j in eachindex(s_grid)], 1:3)
     med_model = median(selected_sparsity)
-    qt1_model = med_model - quantile(selected_sparsity, 1//4)
-    qt3_model = quantile(selected_sparsity, 3//4) - med_model
+    clo_model = quantile(selected_sparsity, α)
+    chi_model = quantile(selected_sparsity, 1-α)
 
     # Default options.
     xs = 100 .* s_grid
@@ -118,7 +121,7 @@ function run_example(rng::AbstractRNG, filename, title, cv_set, test_set, nrepli
 
     # Plot each CV validation path as a function of sparsity with mean trajectory highlighted in red; median in blue.
     fig = plot(;options...)
-    foreach(path -> plot!(xs, path, lw=3, color=:black, alpha=1/nreplicates, label=nothing, title=title), cvpath)
+    foreach(path -> plot!(xs, path[2], lw=3, color=:black, alpha=1/sqrt(nreplicates), label=nothing, title=title), cvpath)
     plot!(xs, avg_score[2], lw=3, color=:red, label="mean")
     plot!(xs, med_score[2], lw=3, color=:blue, label="median")
     savefig(fig, "~/Desktop/VDA/$(filename)-errors.png")
@@ -149,8 +152,11 @@ function run_example(rng::AbstractRNG, filename, title, cv_set, test_set, nrepli
         b = med_score[i][j]
         arnd = round(a, sigdigits=4)
         brnd = round(b, sigdigits=4)
-        plot!(fig, xs, med_score[i], ribbon=(qt1_score[i], qt3_score[i]), lw=1, subplot=i+1)
-        scatter!(fig, (a, b), xerr=([qt1_model], [qt3_model]), marker=:x, color=:black, markersize=8, subplot=i+1)
+        lower = med_score[i] .- clo_score[i]
+        upper = chi_score[i] .- med_score[i]
+        error_bars = [(a - clo_model, chi_model - a)]
+        plot!(fig, xs, med_score[i], ribbon=(lower, upper), lw=1, subplot=i+1)
+        scatter!(fig, (a, b), xerr=error_bars, marker=:x, color=:black, markersize=8, subplot=i+1)
         annotate!(fig, [(a, brnd+20, ("($(arnd), $(brnd))", 10, :center))], subplot=i+1)
     end
     savefig(fig, "~/Desktop/VDA/$(filename)-summaryB.png")
@@ -159,8 +165,8 @@ function run_example(rng::AbstractRNG, filename, title, cv_set, test_set, nrepli
         avg=avg_model,
         std=std_model,
         med=med_model,
-        qt1=qt1_model,
-        qt3=qt3_model,
+        clo=clo_model,
+        chi=chi_model,
     )
 
     j_avg = ifelse(sparse2dense, findfirst(≤(avg_model), xs), findlast(≤(avg_model), xs))
@@ -170,8 +176,8 @@ function run_example(rng::AbstractRNG, filename, title, cv_set, test_set, nrepli
             avg=avg_score[i][j_avg],
             std=std_score[i][j_avg],
             med=med_score[i][j_med],
-            qt1=qt1_score[i][j_med],
-            qt3=qt3_score[i][j_med],
+            clo=clo_score[i][j_med],
+            chi=chi_score[i][j_med],
         ),
         1:3
     )
@@ -236,17 +242,20 @@ function run_nonlinear_example(rng::AbstractRNG, filename, title, kernel, cv_set
 
     # Average CV errors & sparsity over replicates.
     avg_score = mean(cvpath)
-    std_score = map(i -> std(map(x -> x[i], cvpath)), 1:3) ./ sqrt(nreplicates)
+    std_score = map(i -> std(map(x -> x[i], cvpath)), 1:3)
     avg_model = mean(selected_sparsity)
-    std_model = std(selected_sparsity) ./ sqrt(nreplicates)
+    std_model = std(selected_sparsity)
     
     # Median CV errors & sparsity over replicates
+    credibility = 19//20
+    α = (1-credibility)/2
+
     med_score = map(i -> [median(map(x -> x[i][j], cvpath)) for j in eachindex(s_grid)], 1:3)
-    qt1_score = med_score .- map(i -> [quantile(map(x -> x[i][j], cvpath), 1//4) for j in eachindex(s_grid)], 1:3)
-    qt3_score = map(i -> [quantile(map(x -> x[i][j], cvpath), 3//4) for j in eachindex(s_grid)], 1:3) .- med_score
+    clo_score = map(i -> [quantile(map(x -> x[i][j], cvpath), α) for j in eachindex(s_grid)], 1:3)
+    chi_score = map(i -> [quantile(map(x -> x[i][j], cvpath), 1-α) for j in eachindex(s_grid)], 1:3)
     med_model = median(selected_sparsity)
-    qt1_model = med_model - quantile(selected_sparsity, 1//4)
-    qt3_model = quantile(selected_sparsity, 3//4) - med_model
+    clo_model = quantile(selected_sparsity, α)
+    chi_model = quantile(selected_sparsity, 1-α)
 
     # Default options.
     xs = 100 .* s_grid
@@ -265,7 +274,7 @@ function run_nonlinear_example(rng::AbstractRNG, filename, title, kernel, cv_set
 
     # Plot each CV validation path as a function of sparsity with mean trajectory highlighted in red; median in blue.
     fig = plot(;options...)
-    foreach(path -> plot!(xs, path, lw=3, color=:black, alpha=1/nreplicates, label=nothing, title=title), cvpath)
+    foreach(path -> plot!(xs, path[2], lw=3, color=:black, alpha=1/nreplicates, label=nothing, title=title), cvpath)
     plot!(xs, avg_score[2], lw=3, color=:red, label="mean")
     plot!(xs, med_score[2], lw=3, color=:blue, label="median")
     savefig(fig, "~/Desktop/VDA/$(filename)-errors.png")
@@ -296,8 +305,11 @@ function run_nonlinear_example(rng::AbstractRNG, filename, title, kernel, cv_set
         b = med_score[i][j]
         arnd = round(a, sigdigits=4)
         brnd = round(b, sigdigits=4)
-        plot!(fig, xs, med_score[i], ribbon=(qt1_score[i], qt3_score[i]), lw=1, subplot=i+1)
-        scatter!(fig, (a, b), xerr=([qt1_model], [qt3_model]), marker=:x, color=:black, markersize=8, subplot=i+1)
+        lower = med_score[i] .- clo_score[i]
+        upper = chi_score[i] .- med_score[i]
+        error_bars = [(a - clo_model, chi_model - a)]
+        plot!(fig, xs, med_score[i], ribbon=(lower, upper), lw=1, subplot=i+1)
+        scatter!(fig, (a, b), xerr=error_bars, marker=:x, color=:black, markersize=8, subplot=i+1)
         annotate!(fig, [(a, brnd+20, ("($(arnd), $(brnd))", 10, :center))], subplot=i+1)
     end
     savefig(fig, "~/Desktop/VDA/$(filename)-summaryB.png")
@@ -306,8 +318,8 @@ function run_nonlinear_example(rng::AbstractRNG, filename, title, kernel, cv_set
         avg=avg_model,
         std=std_model,
         med=med_model,
-        qt1=qt1_model,
-        qt3=qt3_model,
+        clo=clo_model,
+        chi=chi_model,
     )
 
     j_avg = ifelse(sparse2dense, findfirst(≤(avg_model), xs), findlast(≤(avg_model), xs))
@@ -317,8 +329,8 @@ function run_nonlinear_example(rng::AbstractRNG, filename, title, kernel, cv_set
             avg=avg_score[i][j_avg],
             std=std_score[i][j_avg],
             med=med_score[i][j_med],
-            qt1=qt1_score[i][j_med],
-            qt3=qt3_score[i][j_med],
+            clo=clo_score[i][j_med],
+            chi=chi_score[i][j_med],
         ),
         1:3
     )
