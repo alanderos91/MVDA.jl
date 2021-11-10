@@ -1,4 +1,6 @@
-using MVDA, Statistics, Random, LinearAlgebra, ProgressMeter, Plots
+using MVDA, MLDataUtils, Statistics, StatsBase, LinearAlgebra
+using Random, StableRNGs
+using ProgressMeter, Plots
 
 # helper functions for evaluating misclassification errors
 function get_average_score(result, i)
@@ -11,30 +13,50 @@ function get_std_score(result, i)
     dropdims(std(tmp, dims=3), dims=(2,3))
 end
 
-function gtol_sensitivity(tol, data)
+function standardize!(X)
+    F = fit(ZScoreTransform, X, dims=1)
+    StatsBase.transform!(F, X)
+end
+
+_permute!(x::AbstractVector, idx) = permute!(x, idx)
+_permuterows!(X::AbstractMatrix, idx) = foreach(row -> _permute!(row, idx), eachrow(X))
+_permutecols!(X::AbstractMatrix, idx) = foreach(col -> _permute!(col, idx), eachcol(X))
+
+function make_vertex_matrix!(Y, problem, labels)
+    label2vertex = problem.label2vertex
+    for (i, label_i) in enumerate(labels)
+        Y[i,:] .= label2vertex[label_i]
+    end
+    return Y
+end
+
+function gtol_sensitivity(tol, cv_data, test_data)
     # Standardize data and create problem instance with intercept.
-    targets, _X = data
-    idx = similar(Vector{Int}, axes(_X, 1))
-    randperm!(MersenneTwister(1234), idx)
-    targets, X = targets[idx], _X[idx, :]
-    X .= (X .- mean(X, dims=1)) ./ std(X, dims=1)
+    targets, X = cv_data
     problem = MVDAProblem(targets, X, intercept=true)
-    
-    # Create problem and create grids.
-    _, p, c = MVDA.probdims(problem)
+
+    # Get problem size and create grids.
+    n, p, c = MVDA.probdims(problem)
     ϵ = ifelse(c == 2, 0.5, 0.5 * sqrt(2*c/(c-1)))
     ϵ_grid = [ϵ]
     s_grid = [1-k/p for k in p:-1:0]
+
+    # Create CV and Test sets based on vertex encoding.
+    ntest = length(test_data[1])
+    CV_Y = make_vertex_matrix!(Matrix{Float64}(undef, n, c-1), problem, cv_data[1])
+    CV_X = problem.X
+    T_Y  = make_vertex_matrix!(Matrix{Float64}(undef, ntest, c-1), problem, test_data[1])
+    T_X  = problem.intercept ? [test_data[2] ones(ntest)] : test_data[2]
 
     # Initialize and run 5-fold cross-validiation.
     fill!(problem.coeff.all, 1/p)
     @views copyto!(problem.coeff.all[end, :], mean(problem.Y, dims=1))
     
-    result = cv_MVDA(MMSVD(), problem, ϵ_grid, s_grid;
+    result = cv_MVDA(MMSVD(), problem, (CV_Y, CV_X), (T_Y, T_X), ϵ_grid, s_grid;
         progressbar=false,
         gtol=tol,
         nouter=10^2,
-        ninner=10^5,
+        ninner=10^6,
         nfolds=5,
         dtol=1e-6,
         rtol=0.0,
@@ -51,16 +73,31 @@ function gtol_sensitivity(tol, data)
     return s_optimal, avg_fold_score
 end
 
+# Simulation settings
 p = 100
 c = 4
 d = 3.0
+
+function simulate(n, rng)
+    global p, c, d
+    targets, X = MVDA.simulate_WS2007(n*c, p, c, n, d; rng=rng)
+    standardize!(X)
+    return (targets, X)
+end
+
 nsamples1 = 20
 nsamples2 = 500
-underdetermined_data = MVDA.simulate_WS2007(nsamples1*c, p, c, nsamples1, d)
-overdetermined_data = MVDA.simulate_WS2007(nsamples2*c, p, c, nsamples2, d)
+seed = 1122
+rng = StableRNG(0)
 
-underdetermined(tol) = gtol_sensitivity(tol, underdetermined_data)
-overdetermined(tol) = gtol_sensitivity(tol, overdetermined_data)
+Random.seed!(rng, 1122)
+underdetermined_data = splitobs(simulate(nsamples1, rng), at=0.8, obsdim=1)
+
+Random.seed!(rng, 1122)
+overdetermined_data = splitobs(simulate(nsamples2, rng), at=0.8, obsdim=1)
+
+underdetermined(tol) = gtol_sensitivity(tol, underdetermined_data...)
+overdetermined(tol) = gtol_sensitivity(tol, overdetermined_data...)
 
 alloc_path(n) = Vector{Vector{Float64}}(undef, n)
 npoints = 25
@@ -93,11 +130,17 @@ function plot_summary(gtol, errors, path, p; kwargs...)
     z = vcat(errors'...)
     
     fig = heatmap(x, y, z, yscale=:log10; xlabel="Sparsity (%)", ylabel="gtol", colorbar_title="Classification Error (%)", clim=(0,100), color=:vik, kwargs...)
-    plot!(path, gtol, lw=3, ls=:dot, alpha=0.5, color=:white, legend=nothing, framestyle=:grid, grid=nothing)
+    plot!(path, gtol, lw=3, ls=:dot, alpha=0.75, color=:white, legend=nothing, framestyle=:grid, grid=nothing)
     
     return fig
 end
 
 yticks = xs[1:3:npoints]
-plot_summary(xs, ys[1].V, ys[1].s, p, yticks=yticks, dpi=300); savefig("~/Desktop/VDA/gtol-underdetermined.png")
-plot_summary(xs, ys[2].V, ys[2].s, p, yticks=yticks, dpi=300); savefig("~/Desktop/VDA/gtol-overdetermined.png")
+plot_summary(xs, ys[1].Tr, ys[1].s, p, yticks=yticks, dpi=300); savefig("~/Desktop/VDA/gtol-underdetermined-Tr.png")
+plot_summary(xs, ys[1].V, ys[1].s, p, yticks=yticks, dpi=300); savefig("~/Desktop/VDA/gtol-underdetermined-V.png")
+plot_summary(xs, ys[1].T, ys[1].s, p, yticks=yticks, dpi=300); savefig("~/Desktop/VDA/gtol-underdetermined-T.png")
+
+plot_summary(xs, ys[2].Tr, ys[2].s, p, yticks=yticks, dpi=300); savefig("~/Desktop/VDA/gtol-overdetermined-Tr.png")
+plot_summary(xs, ys[2].V, ys[2].s, p, yticks=yticks, dpi=300); savefig("~/Desktop/VDA/gtol-overdetermined-V.png")
+plot_summary(xs, ys[2].T, ys[2].s, p, yticks=yticks, dpi=300); savefig("~/Desktop/VDA/gtol-overdetermined-T.png")
+

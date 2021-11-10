@@ -1,7 +1,7 @@
 using MLDataUtils
 include("cv-driver.jl") # load the rest
 
-N = 10
+N = 50
 file = "/home/alanderos/Desktop/VDA/uci-timings.txt"
 isfile(file) && rm(file)
 open(file, "a") do io
