@@ -49,10 +49,10 @@ function __mm_update_rho__(::MMSVD, problem, ϵ, ρ, k, extras)
     a² = 1 / n
 
     # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
-    @inbounds for j in eachindex(Ψ)
+    for j in eachindex(Ψ)
         Ψⱼ = Ψ[j]
         b² = ρ
-        @inbounds for i in eachindex(Ψⱼ.diag)
+        for i in eachindex(Ψⱼ.diag)
             sᵢ² = s[i]^2
             Ψⱼ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
         end
@@ -68,10 +68,10 @@ function __mm_update_lambda__(::MMSVD, problem, ϵ, λ, extras)
     a² = 1 / n
 
     # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
-    @inbounds for j in eachindex(Ψ)
+    for j in eachindex(Ψ)
         Ψⱼ = Ψ[j]
         b² = λ
-        @inbounds for i in eachindex(Ψⱼ.diag)
+        for i in eachindex(Ψⱼ.diag)
             sᵢ² = s[i]^2
             Ψⱼ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
         end

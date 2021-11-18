@@ -122,7 +122,7 @@ function __apply_nesterov__!(x, y, iter::Integer, needs_reset::Bool, r::Int=3)
         iter = 1
     else # Nesterov acceleration 
         γ = (iter - 1) / (iter + r - 1)
-        @inbounds for i in eachindex(x)
+        for i in eachindex(x)
             xi, yi = x[i], y[i]
             zi = xi + γ * (xi - yi)
             x[i], y[i] = zi, xi
@@ -155,13 +155,19 @@ Apply a projection to model coefficients.
 function apply_projection(projection, problem, k)
     idx = get_projection_indices(problem)
     @unpack coeff, proj = problem
+    @unpack scores = projection
     copyto!(proj.all, coeff.all)
 
+    # projection step, might not be unique
     if problem.intercept
         projection(view(proj.all, idx, :), k)
     else
         projection(proj.all, k)
     end
+
+    # correction step, select optimal solution
+
+    return proj.all
 end
 
 """
