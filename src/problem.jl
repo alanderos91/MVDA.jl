@@ -115,6 +115,37 @@ function create_X_and_K(kernel::Nothing, ::Type{T}, data, intercept) where T<:Re
     return X, nothing
 end
 
+"""
+    MVDAProblem{T} where T<:AbstractFloat
+
+Representation of a vertex discriminant analysis problem using floating-point type `T`.
+Each unique class label is mapped to a unique vertex of a regular simplex. A `(c-1)`-simplex is used to encode `c` classes.
+
+**Note**: The matrix `X` is used as the *design matrix* for linear problems (i.e. `kernel isa Nothing`); otherwise the matrix `K` is used for the design (i.e. `kernel isa Kernel`).
+In either case, the *design matrix* will contain a column of `1`s when `intecept=true`.
+
+# Fields
+
+- `n`: Number of samples/instances in problem.
+- `p`: Number of features in each sample/instance.
+- `c`: Total number of classes represented in vertex space.
+
+- `Y`: Response matrix. Each row `Y[i,:]` corresponds to the vertex assigned to sample `i`.
+- `X`: Data matrix. Each row `X[i,:]` corresponds to a sample `i` with `p` features.
+- `K`: Kernel matrix. Each row `K[i,:]` corresponds to a sample `i`.
+
+- `vertex`: List of vertices used to encode classes.
+- `label2vertex`: An associative map translating a value from original label space to vertex space.
+- `vertex2label`: An associative map trasnlating a value from vertex space to the original label space.
+- `intercept`: Indicates whether the design matrix/model include an intercept term (`intercept=true`).
+
+- `kernel`: A `Kernel` object from KernelFunctions.jl. See also: [`Kernel`](@ref).
+- `coeff`: A `NamedTuple` containing the current estimates for the full model (`coeff.all`) and views along each dimension in vertex space (`coeff.dim`).
+- `coeff_prev`: Similar to `coeff`, but contains previous estimates.
+- `proj`: Similar to `coeff`, but contains projection of `coeff`.
+- `res`: A `NamedTuple` containing various residuals.
+- `grad`: Similar to `coeff`, but contains gradient with respect to `coeff`.
+"""
 struct MVDAProblem{T<:AbstractFloat,kernT,matT<:AbstractMatrix{T},labelT,viewT,R1,R2,R3}
     ##### dimensions #####
     n::Int
@@ -163,6 +194,23 @@ struct MVDAProblem{T<:AbstractFloat,kernT,matT<:AbstractMatrix{T},labelT,viewT,R
     end
 end
 
+"""
+    MVDAProblem(labels, data; [intercept=true], [kernel=nothing])
+
+Create a `MVDAProblem` instance from the labeled dataset `(label, data)`.
+
+The `label` information should enter as an iterable object, and `data` should be a `n × p` matrix with samples/instances aligned along rows (e.g. `data[i,:]` is sample `i`).
+
+!!! note
+
+    Defaults to linear classifier, `kernel=nothing`.
+    Specifying a `Kernel` requires `using KernelFunctions` first.
+
+# Keyword Arguments
+
+- `intercept`: Should the model include an intercept term?
+- `kernel`: How should the data be transformed?.
+"""
 function MVDAProblem(labels, data; intercept::Bool=true, kernel::Union{Nothing,Kernel}=nothing)
     # get problem info
     class = sort!(unique(labels))
@@ -186,6 +234,11 @@ function MVDAProblem(labels, data; intercept::Bool=true, kernel::Union{Nothing,K
     )
 end
 
+"""
+    remake(problem::MVDAProblem, labels, data)
+
+Create a new `MVDAProblem` instance from the labeled dataset `(label, data)` using the vertex encoding from the reference `problem`.
+"""
 function remake(problem::MVDAProblem, labels, data)
     # extract encoding-dependent fields + problem info
     @unpack vertex, label2vertex, vertex2label, intercept, kernel = problem
@@ -213,22 +266,40 @@ Return the floating-point type used for model coefficients.
 floattype(::MVDAProblem{T}) where T = T
 
 """
-Return the design matrix, `X`, in the linear model `Y ∼ X * B`.
+Return the design matrix used for fitting a classifier.
+
+Uses `problem.X` when `problem.kernel isa Nothing` and `problem.K` when `problem.kernel isa Kernel` from KernelFunctions.jl.
 """
-get_design_matrix(problem::MVDAProblem) = get_design_matrix(problem.kernel, problem) # dispatch
-get_design_matrix(::Nothing, problem::MVDAProblem) = problem.X  # linear case
-get_design_matrix(::Kernel, problem::MVDAProblem) = problem.K   # nonlinear case
+get_design_matrix(problem::MVDAProblem) = __get_design_matrix__(problem.kernel, problem) # dispatch
+__get_design_matrix__(::Nothing, problem::MVDAProblem) = problem.X  # linear case
+__get_design_matrix__(::Kernel, problem::MVDAProblem) = problem.K   # nonlinear case
 
 """
 Returns the number of samples, number of features, and number of categories, respectively.
 """
 probdims(problem::MVDAProblem) = (problem.n, problem.p, problem.c)
 
-predict(problem::MVDAProblem, x::AbstractVector) = predict(problem.kernel, problem, x)
-predict(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> predict(problem, xᵢ), eachrow(X))
-predict(::Nothing, problem::MVDAProblem, x::AbstractVector) = problem.proj.all' * x
+"""
+    predict(problem::MVDAProblem, x::AbstractVector)
 
-function predict(::Kernel, problem::MVDAProblem, x::AbstractVector)
+Predict the vertex value of a sample/instance `x` based on the fitted model in `problem`.
+
+See also: [`predict(problem::MVDAProblem, X::AbstractMatrix)`](@ref), [`classify`](@ref)
+"""
+predict(problem::MVDAProblem, x::AbstractVector) = __predict__(problem.kernel, problem, x)
+
+"""
+    predict(problem::MVDAProblem, X::AbstractMatrix)
+
+Predict the vertex values of samples/instances in `X`, assumed to be aligned along each row (e.g. `X[i,:]` for sample `i`).
+
+See also: [`predict(problem::MVDAProblem, x::AbstractVector)`](@ref), [`classify`](@ref)
+"""
+predict(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> predict(problem, xᵢ), eachrow(X))
+
+__predict__(::Nothing, problem::MVDAProblem, x::AbstractVector) = problem.proj.all' * x
+
+function __predict__(::Kernel, problem::MVDAProblem, x::AbstractVector)
     _, _, c = probdims(problem)
     κ = problem.kernel
     Γ = problem.coeff.all
@@ -242,8 +313,23 @@ function predict(::Kernel, problem::MVDAProblem, x::AbstractVector)
     return ϕ
 end
 
+"""
+    classify(problem::MVDAProblem, X::AbstractMatrix)
+
+Classify the samples/instances in `X` based on the model in `problem`.
+
+Each sample is assumed to be aligned along rows (e.g. `X[i,:]` is sample `i`).
+See also: [`classify(problem::MVDAProblem, x::AbstractVector)`](@ref), [`predict`](@ref)
+"""
 classify(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> classify(problem, xᵢ), eachrow(X))
 
+"""
+    classify(problem::MVDAProblem, x::AbstractVector)
+
+Classify the sample/instance `x` based on the model in `problem`.
+
+See also: [`classify(problem::MVDAProblem, X::AbstractMatrix)`](@ref), [`predict`](@ref)
+"""
 function classify(problem::MVDAProblem, x::AbstractVector)
     y = predict(problem, x)
     v = problem.vertex
