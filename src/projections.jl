@@ -23,7 +23,7 @@ function project_l0_ball!(x, idx, k, buffer)
     # preserve the top k elements
     p = abs(pivot)
     nonzero_count = 0
-    @inbounds for i in eachindex(x)
+    for i in eachindex(x)
         if abs(x[i]) < p
             x[i] = 0
         else
@@ -33,28 +33,12 @@ function project_l0_ball!(x, idx, k, buffer)
 
     # resolve ties
     if nonzero_count > k
-        start = _k
-        stop = _k
-        @inbounds for i in _k-1:-1:1
-            index = idx[i]
-            if x[index] != pivot
-                break
-            end
-            start = i
-        end
-        @inbounds for i in _k+1:1:n
-            index = idx[i]
-            if x[index] != pivot
-                break
-            end
-            stop = i
-        end
         number_to_drop = nonzero_count - k
-        _buffer = view(buffer, 1:number_to_drop)
-        sample!(start:stop, _buffer, replace=false)
-        @inbounds for i in _buffer
-            index = idx[i]
-            x[index] = 0
+        _buffer_ = view(buffer, 1:number_to_drop)
+        _indexes_ = findall(!iszero, x)
+        sample!(_indexes_, _buffer_, replace=false)
+        for i in _buffer_
+            x[i] = 0
         end
     end
 
@@ -97,10 +81,11 @@ function project_l0_ball!(X::AbstractMatrix, idx, scores, k, buffer; by::Union{V
     # preserve the top k elements
     p = abs(pivot)
     nonzero_count = 0
-    @inbounds for (scoreᵢ, xᵢ) in zip(scores, itr2)
+    for i in eachindex(scores)
         # row is not in the top k
-        if scoreᵢ < p
-            fill!(xᵢ, 0)
+        if scores[i] < p
+            fill!(view(X, i, :), 0)
+            scores[i] = 0
         else # row is in the top k
             nonzero_count += 1
         end
@@ -109,15 +94,14 @@ function project_l0_ball!(X::AbstractMatrix, idx, scores, k, buffer; by::Union{V
     # resolve ties
     if nonzero_count > k
         number_to_drop = nonzero_count - k
-        _buffer = view(buffer, 1:number_to_drop)
-        _indexes_ = findall(s -> isequal(p, abs(s)), scores)
-        sample!(_indexes_, _buffer, replace=false)
-        @inbounds for i in _buffer
-            index = idx[i]
+        _buffer_ = view(buffer, 1:number_to_drop)
+        _indexes_ = findall(!iszero, scores)
+        sample!(_indexes_, _buffer_, replace=false)
+        for i in _buffer_
             if by isa Val{:row}
-                @views fill!(X[index, :], 0)
+                fill!(view(X, i, :), 0)
             elseif by isa Val{:col}
-                @views fill!(X[:, index], 0)
+                fill!(view(X, :, i), 0)
             end
         end
     end
