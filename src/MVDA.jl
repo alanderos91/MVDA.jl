@@ -415,73 +415,73 @@ function cv_MVDA(algorithm, problem::MVDAProblem, cv_set, test_set, ϵ_grid, s_g
     return result
 end
 
-function cv_MVDA(algorithm, problem::NonLinearMVDAProblem, cv_set, test_set, ϵ_grid, s_grid;
-    nfolds::Int=10,
-    scoref::Function=DEFAULT_SCORE_FUNCTION,
-    cb::Function=DEFAULT_CALLBACK,
-    progressbar::Bool=true,
-    kwargs...
-    )
-    # Initialize model object; just used to pass around coefficients.
-    @unpack Y, X = problem
-    _, p, c = probdims(problem)
-    T = floattype(problem)
+# function cv_MVDA(algorithm, problem::NonLinearMVDAProblem, cv_set, test_set, ϵ_grid, s_grid;
+#     nfolds::Int=10,
+#     scoref::Function=DEFAULT_SCORE_FUNCTION,
+#     cb::Function=DEFAULT_CALLBACK,
+#     progressbar::Bool=true,
+#     kwargs...
+#     )
+#     # Initialize model object; just used to pass around coefficients.
+#     @unpack Y, X = problem
+#     _, p, c = probdims(problem)
+#     T = floattype(problem)
 
-    # Initialize the output.
-    tmp = scoref(problem, test_set, test_set, test_set)
-    score = Array{typeof(tmp)}(undef, length(s_grid), length(ϵ_grid), nfolds)
+#     # Initialize the output.
+#     tmp = scoref(problem, test_set, test_set, test_set)
+#     score = Array{typeof(tmp)}(undef, length(s_grid), length(ϵ_grid), nfolds)
 
-    # Run cross-validation.
-    if progressbar
-        nvals = length(ϵ_grid) * length(s_grid)
-        progress_bar = Progress(nfolds*nvals, 1, "Running CV w/ $(algorithm)... ")
-    end
+#     # Run cross-validation.
+#     if progressbar
+#         nvals = length(ϵ_grid) * length(s_grid)
+#         progress_bar = Progress(nfolds*nvals, 1, "Running CV w/ $(algorithm)... ")
+#     end
 
-    for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
-        # Retrieve the training set and validation set.
-        train_set, validation_set = fold
-        train_Y, train_X = train_set
-        train_n = size(train_Y, 1)
+#     for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
+#         # Retrieve the training set and validation set.
+#         train_set, validation_set = fold
+#         train_Y, train_X = train_set
+#         train_n = size(train_Y, 1)
         
-        # Create a problem object for the training set.
-        train_problem = remake(problem, copy(train_Y), copy(train_X))
-        extras = __mm_init__(algorithm, train_problem, nothing)
+#         # Create a problem object for the training set.
+#         train_problem = remake(problem, copy(train_Y), copy(train_X))
+#         extras = __mm_init__(algorithm, train_problem, nothing)
 
-        # Select correct subset of initial model parameters.
-        init_coeff = @view problem.coeff.all[1:train_n, :]
-        init_intercept = @view problem.coeff.all[end, :]
+#         # Select correct subset of initial model parameters.
+#         init_coeff = @view problem.coeff.all[1:train_n, :]
+#         init_intercept = @view problem.coeff.all[end, :]
 
-        for (j, ϵ) in enumerate(ϵ_grid)
-            # Set initial model parameters.
-            @views begin
-                copyto!(train_problem.coeff.all[1:train_n, :], init_coeff)
-                copyto!(train_problem.coeff.all[end, :], init_intercept)
-            end
+#         for (j, ϵ) in enumerate(ϵ_grid)
+#             # Set initial model parameters.
+#             @views begin
+#                 copyto!(train_problem.coeff.all[1:train_n, :], init_coeff)
+#                 copyto!(train_problem.coeff.all[end, :], init_intercept)
+#             end
 
-            for (i, s) in enumerate(s_grid)
-                # Obtain solution as function of (s, ϵ).
-                r = fit_MVDA!(algorithm, train_problem, ϵ, s, extras, (false, false,); cb=cb, kwargs...)
+#             for (i, s) in enumerate(s_grid)
+#                 # Obtain solution as function of (s, ϵ).
+#                 r = fit_MVDA!(algorithm, train_problem, ϵ, s, extras, (false, false,); cb=cb, kwargs...)
                 
-                # Evaluate the solution.
-                score[i,j,k] = scoref(train_problem, train_set, validation_set, test_set)
+#                 # Evaluate the solution.
+#                 score[i,j,k] = scoref(train_problem, train_set, validation_set, test_set)
 
-                # Update the progress bar.
-                if progressbar
-                    next!(progress_bar, showvalues=[(:fold, k), (:sparsity, s), (:ϵ, ϵ)])
-                end
-            end
-        end
-    end
+#                 # Update the progress bar.
+#                 if progressbar
+#                     next!(progress_bar, showvalues=[(:fold, k), (:sparsity, s), (:ϵ, ϵ)])
+#                 end
+#             end
+#         end
+#     end
 
-    # Package the result.
-    result = (;
-        epsilon=ϵ_grid,
-        sparsity=s_grid,
-        score=score,
-    )
+#     # Package the result.
+#     result = (;
+#         epsilon=ϵ_grid,
+#         sparsity=s_grid,
+#         score=score,
+#     )
 
-    return result
-end
+#     return result
+# end
 
 function fit_regMVDA(algorithm, problem, ϵ::Real, λ::Real; kwargs...)
     # Initialize any additional data structures.
@@ -608,7 +608,7 @@ function fit_MVDA(algorithm::CyclicVDA, problem, ϵ, δ, λ₁, λ₂;
 end
 
 export IterationResult, SubproblemResult
-export MVDAProblem, NonLinearMVDAProblem, SD, MMSVD, CyclicVDA
+export MVDAProblem, SD, MMSVD, CyclicVDA
 export fit_MVDA, fit_MVDA!, cv_MVDA, fit_regMVDA, fit_regMVDA!
 
 end

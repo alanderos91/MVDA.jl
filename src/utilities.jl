@@ -136,18 +136,13 @@ end
 """
 Map a sparsity level `s` to an integer `k`, assuming `n` elements.
 """
-sparsity_to_k(problem::MVDAProblem, s) = round(Int, (size(problem.X, 2) - problem.intercept) * (1-s))
-sparsity_to_k(problem::NonLinearMVDAProblem, s) = round(Int, size(problem.X, 1) * (1-s))
+sparsity_to_k(problem::MVDAProblem, s) = sparsity_to_k(problem.kernel, problem, s)
+sparsity_to_k(::Nothing, problem::MVDAProblem, s) = round(Int, (1-s) * problem.p)
+sparsity_to_k(::Kernel, problem::MVDAProblem, s) = round(Int, (1-s)*problem.n)
 
-function get_projection_indices(problem::MVDAProblem)
-    _, p, _ = probdims(problem)
-    return 1:p
-end
-
-function get_projection_indices(problem::NonLinearMVDAProblem)
-    n, _, _ = probdims(problem)
-    return 1:n
-end
+get_projection_indices(problem::MVDAProblem) = get_projection_indices(problem.kernel, problem)
+get_projection_indices(::Nothing, problem::MVDAProblem) = 1:problem.p
+get_projection_indices(::Kernel, problem::MVDAProblem) = 1:problem.n
 
 """
 Apply a projection to model coefficients.

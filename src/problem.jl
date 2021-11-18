@@ -51,59 +51,32 @@ function __allocate_res__(T, n, p, c)
     return (main=main, dist=dist, weighted=weighted,)
 end
 
-struct MVDAProblem{T,matT,labelT,viewT,R1,R2,R3}
-    ##### data #####
-    Y::matT
-    X::matT
-    vertex::Vector{Vector{T}}
-    label2vertex::Dict{labelT,Vector{T}}
-    vertex2label::Dict{Vector{T},labelT}
-    intercept::Bool
-
-    ##### model #####
-    coeff::Coefficients{matT,viewT}
-    coeff_prev::Coefficients{matT,viewT}
-    
-    ##### quadratic surrogate #####
-    proj::Coefficients{matT,viewT}
-    res::Residuals{R1,R2,R3}
-    grad::Coefficients{matT,viewT}
+function __allocate_problem_arrays__(::Nothing, ::Type{T}, n, p, c, intercept::Bool) where T<:Real
+    coeff = __allocate_coeff__(T, p+intercept, c)
+    coeff_prev = __allocate_coeff__(T, p+intercept, c)
+    proj = __allocate_coeff__(T, p+intercept, c)
+    res = __allocate_res__(T, n, p+intercept, c)
+    grad = __allocate_coeff__(T, p+intercept, c)
+    return coeff, coeff_prev, proj, res, grad
 end
 
-function MVDAProblem{T}(Y, X, vertex, label2vertex, vertex2label, intercept, coeff, coeff_prev, proj, res, grad) where T <: Real
-    # get type parameters
-    matT = typeof(Y)
-    labelT = keytype(label2vertex)
-    viewT = typeof(coeff.dim)
-    R1 = typeof(res.main)
-    R2 = typeof(res.dist)
-    R3 = typeof(res.weighted)
-    
-    MVDAProblem{T,matT,labelT,viewT,R1,R2,R3}(
-        Y, X, vertex, label2vertex, vertex2label, intercept,
-        coeff, coeff_prev,
-        proj, res, grad,
-    )
+function __allocate_problem_arrays__(::Kernel, ::Type{T}, n, p, c, intercept::Bool) where T<:Real
+    coeff = __allocate_coeff__(T, n+intercept, c)
+    coeff_prev = __allocate_coeff__(T, n+intercept, c)
+    proj = __allocate_coeff__(T, n+intercept, c)
+    res = __allocate_res__(T, n, n+intercept, c)
+    grad = __allocate_coeff__(T, n+intercept, c)
+    return coeff, coeff_prev, proj, res, grad
 end
 
-function MVDAProblem(labels, X; intercept=true)
-    # modify data in case intercept is used
-    if intercept
-        X = [X ones(size(X, 1))]
-    else
-        X = copy(X)
-    end
+function vertex_encoding(::Type{T}, labels, class) where T<:Real
+    # dimensions
+    c = length(class)
 
-    # get problem info
-    class = unique(labels)
-    (n, p), c = size(X), length(class)
-    T = Float64 # TODO
-
-    # encode labels into vertices
+    # enumerate vertices
     a = ( 1 + sqrt(c) ) / ( (c-1)^(3/2) )
     b = sqrt( c / (c-1) )
     vertex = Vector{Vector{T}}(undef, c)
-
     vertex[1] = 1 / sqrt(c-1) * ones(c-1)
     for j in 2:c
         v = -a * ones(c-1)
@@ -111,45 +84,165 @@ function MVDAProblem(labels, X; intercept=true)
         vertex[j] = v
     end
 
-    # assign classes to vertices and create response matrix
+    # encoding: map labels to vertices and vice-versa
     label2vertex = Dict(class_j => vertex[j] for (j, class_j) in enumerate(class))
     vertex2label = Dict(vertex[j] => class_j for (j, class_j) in enumerate(class))
+
+    # create response matrix based on encoding
+    Y = create_Y(T, labels, label2vertex)
+
+    return Y, vertex, label2vertex, vertex2label
+end
+
+function create_Y(::Type{T}, labels, label2vertex) where T<:Real
+    n, c = length(labels), length(label2vertex)
     Y = Matrix{T}(undef, n, c-1)
-    for (i, label_i) in enumerate(labels)
+    @views for (i, label_i) in enumerate(labels)
         Y[i,:] .= label2vertex[label_i]
     end
+    return Y
+end
+
+function create_X_and_K(kernel::Kernel, ::Type{T}, data, intercept) where T<:Real
+    K = kernelmatrix(kernel, data, obsdim=1)
+    intercept && (K = [K ones(size(K, 1))])
+    X = copy(data)
+    return X, K
+end
+
+function create_X_and_K(kernel::Nothing, ::Type{T}, data, intercept) where T<:Real
+    X = intercept ? [data ones(size(data, 1))] : copy(data)
+    return X, nothing
+end
+
+struct MVDAProblem{T<:AbstractFloat,kernT,matT<:AbstractMatrix{T},labelT,viewT,R1,R2,R3}
+    ##### dimensions #####
+    n::Int
+    p::Int
+    c::Int
+    
+    ##### data #####
+    Y::matT
+    X::matT
+    K::Union{Nothing,matT}
+    vertex::Vector{Vector{T}}
+    label2vertex::Dict{labelT,Vector{T}}
+    vertex2label::Dict{Vector{T},labelT}
+    intercept::Bool
+
+    ##### model #####
+    kernel::kernT
+    coeff::Coefficients{matT,viewT}
+    coeff_prev::Coefficients{matT,viewT}
+    
+    ##### quadratic surrogate #####
+    proj::Coefficients{matT,viewT}
+    res::Residuals{R1,R2,R3}
+    grad::Coefficients{matT,viewT}
+
+    ##### Inner Constructor #####
+    function MVDAProblem{T}(n, p, c, Y, X, K, 
+        vertex, label2vertex, vertex2label, intercept,
+        kernel, coeff, coeff_prev,
+        proj, res, grad) where T <: Real
+        # get type parameters
+        kernT = typeof(kernel)
+        matT = typeof(Y)
+        labelT = keytype(label2vertex)
+        viewT = typeof(coeff.dim)
+        R1 = typeof(res.main)
+        R2 = typeof(res.dist)
+        R3 = typeof(res.weighted)
+        
+        new{T,kernT,matT,labelT,viewT,R1,R2,R3}(
+            n, p, c,
+            Y, X, K, vertex, label2vertex, vertex2label, intercept,
+            kernel, coeff, coeff_prev,
+            proj, res, grad,
+        )
+    end
+end
+
+function MVDAProblem(labels, data; intercept::Bool=true, kernel::Union{Nothing,Kernel}=nothing)
+    # get problem info
+    class = sort!(unique(labels))
+    (n, p), c = size(data), length(class)
+    T = Float64 # TODO
+
+    # create design matrices
+    X, K = create_X_and_K(kernel, T, data, intercept)
+
+    # assign classes to vertices and create response matrix
+    Y, vertex, label2vertex, vertex2label = vertex_encoding(T, labels, class)
 
     # allocate data structures for coefficients, projections, residuals, and gradient
-    coeff = __allocate_coeff__(T, p, c)
-    coeff_prev = __allocate_coeff__(T, p, c)
-    proj = __allocate_coeff__(T, p, c)
-    res = __allocate_res__(T, n, p, c)
-    grad = __allocate_coeff__(T, p, c)
+    coeff, coeff_prev, proj, res, grad = __allocate_problem_arrays__(kernel, T, n, p, c, intercept)
 
     return MVDAProblem{T}(
-        Y, X, vertex, label2vertex, vertex2label, intercept,
-        coeff, coeff_prev,
+        n, p, c,
+        Y, X, K, vertex, label2vertex, vertex2label, intercept,
+        kernel, coeff, coeff_prev,
+        proj, res, grad,
+    )
+end
+
+function remake(problem::MVDAProblem, labels, data)
+    # extract encoding-dependent fields + problem info
+    @unpack vertex, label2vertex, vertex2label, intercept, kernel = problem
+    n, p, c = length(labels), problem.p, problem.c
+    T = floattype(problem)
+
+    # create new design and response matrices
+    X, K = create_X_and_K(kernel, T, data, intercept)
+    Y = create_Y(T, labels, label2vertex)
+
+    # allocate data structures for coefficients, projections, residuals, and gradient
+    coeff, coeff_prev, proj, res, grad = __allocate_problem_arrays__(kernel, T, n, p, c, intercept)
+
+    return MVDAProblem{T}(
+        n, p, c,
+        Y, X, K, vertex, label2vertex, vertex2label, intercept,
+        kernel, coeff, coeff_prev,
         proj, res, grad,
     )
 end
 
 """
-Returns the floating point type used for model coefficients.
+Return the floating-point type used for model coefficients.
 """
 floattype(::MVDAProblem{T}) where T = T
 
 """
 Return the design matrix, `X`, in the linear model `Y ∼ X * B`.
 """
-get_design_matrix(problem::MVDAProblem) = problem.X
+get_design_matrix(problem::MVDAProblem) = get_design_matrix(problem.kernel, problem) # dispatch
+get_design_matrix(::Nothing, problem::MVDAProblem) = problem.X  # linear case
+get_design_matrix(::Kernel, problem::MVDAProblem) = problem.K   # nonlinear case
 
 """
 Returns the number of samples, number of features, and number of categories, respectively.
 """
-probdims(problem::MVDAProblem) = size(problem.X, 1), size(problem.X, 2) - problem.intercept, length(problem.vertex)
+probdims(problem::MVDAProblem) = (problem.n, problem.p, problem.c)
 
-predict(problem::MVDAProblem, x::AbstractVector) = problem.proj.all' * x
+predict(problem::MVDAProblem, x::AbstractVector) = predict(problem.kernel, problem, x)
 predict(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> predict(problem, xᵢ), eachrow(X))
+predict(::Nothing, problem::MVDAProblem, x::AbstractVector) = problem.proj.all' * x
+
+function predict(::Kernel, problem::MVDAProblem, x::AbstractVector)
+    _, _, c = probdims(problem)
+    κ = problem.kernel
+    Γ = problem.coeff.all
+    ϕ = zeros(c-1)
+    for j in eachindex(ϕ)
+        for (i, xᵢ) in enumerate(eachrow(problem.X))
+            ϕ[j] += Γ[i,j] * κ(xᵢ, x)
+        end
+        ϕ[j] += ifelse(problem.intercept, Γ[end,j], zero(ϕ[j]))
+    end
+    return ϕ
+end
+
+classify(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> classify(problem, xᵢ), eachrow(X))
 
 function classify(problem::MVDAProblem, x::AbstractVector)
     y = predict(problem, x)
@@ -159,184 +252,16 @@ function classify(problem::MVDAProblem, x::AbstractVector)
     return problem.vertex2label[v[j]]
 end
 
-classify(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> classify(problem, xᵢ), eachrow(X))
-
 function Base.show(io::IO, problem::MVDAProblem)
     n, p, c = probdims(problem)
     T = floattype(problem)
+    kernT = typeof(problem.kernel)
     respT = eltype(problem.Y)
     matT = eltype(problem.X)
     labelT = keytype(problem.label2vertex)
+    kernel_info = kernT <: Nothing ? "linear classifier" : "nonlinear classifier ($(kernT))"
     print(io, "MVDAProblem{$(T)}")
-    print(io, "\n  ∘ $(n) sample(s) ($(respT))")
-    print(io, "\n  ∘ $(p) feature(s) ($(matT))")
-    print(io, "\n  ∘ $(c) categories ($(labelT))")
-    print(io, "\n  ∘ intercept? $(problem.intercept)")
-end
-
-struct NonLinearMVDAProblem{T,KERNEL,matT,labelT,viewT,R1,R2,R3}
-    ##### data #####
-    Y::matT
-    X::matT
-    K::matT
-    vertex::Vector{Vector{T}}
-    label2vertex::Dict{labelT,Vector{T}}
-    vertex2label::Dict{Vector{T},labelT}
-    intercept::Bool
-
-    ##### model #####
-    κ::KERNEL
-    coeff::Coefficients{matT,viewT}
-    coeff_prev::Coefficients{matT,viewT}
-    
-    ##### quadratic surrogate #####
-    proj::Coefficients{matT,viewT}
-    res::Residuals{R1,R2,R3}
-    grad::Coefficients{matT,viewT}
-end
-
-function NonLinearMVDAProblem{T}(Y, X, K, vertex, label2vertex, vertex2label, intercept, κ, coeff, coeff_prev, proj, res, grad) where T <: Real
-    # get type parameters
-    KERNEL = typeof(κ)
-    matT = typeof(Y)
-    labelT = keytype(label2vertex)
-    viewT = typeof(coeff.dim)
-    R1 = typeof(res.main)
-    R2 = typeof(res.dist)
-    R3 = typeof(res.weighted)
-    
-    NonLinearMVDAProblem{T,KERNEL,matT,labelT,viewT,R1,R2,R3}(
-        Y, X, K, vertex, label2vertex, vertex2label, intercept,
-        κ, coeff, coeff_prev,
-        proj, res, grad,
-    )
-end
-
-function NonLinearMVDAProblem(κ::Kernel, labels, X; intercept=true)
-    # modify data in case intercept is used
-    K = kernelmatrix(κ, X, obsdim=1)
-    if intercept
-        K = [K ones(size(K, 1))]
-    end
-
-    # get problem info
-    class = unique(labels)
-    (n, p), c = size(X), length(class)
-    T = Float64 # TODO
-
-    # encode labels into vertices
-    a = ( 1 + sqrt(c) ) / ( (c-1)^(3/2) )
-    b = sqrt( c / (c-1) )
-    vertex = Vector{Vector{T}}(undef, c)
-
-    vertex[1] = 1 / sqrt(c-1) * ones(c-1)
-    for j in 2:c
-        v = -a * ones(c-1)
-        v[j-1] += b
-        vertex[j] = v
-    end
-
-    # assign classes to vertices and create response matrix
-    label2vertex = Dict(class_j => vertex[j] for (j, class_j) in enumerate(class))
-    vertex2label = Dict(vertex[j] => class_j for (j, class_j) in enumerate(class))
-    Y = Matrix{T}(undef, n, c-1)
-    for (i, label_i) in enumerate(labels)
-        Y[i,:] .= label2vertex[label_i]
-    end
-
-    # allocate data structures for coefficients, projections, residuals, and gradient
-    coeff = __allocate_coeff__(T, n+intercept, c)
-    coeff_prev = __allocate_coeff__(T, n+intercept, c)
-    proj = __allocate_coeff__(T, n+intercept, c)
-    res = __allocate_res__(T, n, n+intercept, c)
-    grad = __allocate_coeff__(T, n+intercept, c)
-
-    return NonLinearMVDAProblem{T}(
-        Y, X, K, vertex, label2vertex, vertex2label, intercept,
-        κ, coeff, coeff_prev,
-        proj, res, grad,
-    )
-end
-
-function remake(problem::NonLinearMVDAProblem, Y, X)
-    # extract encoding-dependent fields
-    @unpack vertex, label2vertex, vertex2label, intercept, κ = problem
-
-    # modify data in case intercept is used
-    K = kernelmatrix(κ, X, obsdim=1)
-    if intercept
-        K = [K ones(size(K, 1))]
-    end
-
-    # get problem info
-    (n, p), c = size(X), length(vertex)
-    T = floattype(problem)
-
-    # allocate data structures for coefficients, projections, residuals, and gradient
-    coeff = __allocate_coeff__(T, n+intercept, c)
-    coeff_prev = __allocate_coeff__(T, n+intercept, c)
-    proj = __allocate_coeff__(T, n+intercept, c)
-    res = __allocate_res__(T, n, n+intercept, c)
-    grad = __allocate_coeff__(T, n+intercept, c)
-
-    return NonLinearMVDAProblem{T}(
-        Y, X, K, vertex, label2vertex, vertex2label, intercept,
-        κ, coeff, coeff_prev,
-        proj, res, grad,
-    )
-end
-
-"""
-Returns the floating point type used for model coefficients.
-"""
-floattype(::NonLinearMVDAProblem{T}) where T = T
-
-"""
-Return the design matrix, `K`, in the linear model `Y ∼ K * Γ`.
-"""
-get_design_matrix(problem::NonLinearMVDAProblem) = problem.K
-
-"""
-Returns the number of samples, number of features, and number of categories, respectively.
-"""
-probdims(problem::NonLinearMVDAProblem) = size(problem.X, 1), size(problem.X, 2), length(problem.vertex)
-
-function predict(problem::NonLinearMVDAProblem, x::AbstractVector)
-    n, _, c = probdims(problem)
-    κ = problem.κ
-    Γ = problem.coeff.all
-    ϕ = zeros(c-1)
-
-    for j in eachindex(ϕ)
-        for (i, xᵢ) in enumerate(eachrow(problem.X))
-            ϕ[j] += Γ[i,j] * κ(xᵢ, x)
-        end
-        ϕ[j] += ifelse(problem.intercept, Γ[end,j], zero(ϕ[j]))
-    end
-
-    return ϕ
-end
-
-predict(problem::NonLinearMVDAProblem, X::AbstractMatrix) = map(xᵢ -> predict(problem, xᵢ), eachrow(X))
-
-function classify(problem::NonLinearMVDAProblem, x::AbstractVector)
-    y = predict(problem, x)
-    v = problem.vertex
-    distances = [norm(y - v[j]) for j in eachindex(v)]
-    j = argmin(distances)
-    return problem.vertex2label[v[j]]
-end
-
-classify(problem::NonLinearMVDAProblem, X::AbstractMatrix) = map(xᵢ -> classify(problem, xᵢ), eachrow(X))
-
-function Base.show(io::IO, problem::NonLinearMVDAProblem)
-    n, p, c = probdims(problem)
-    T = floattype(problem)
-    respT = eltype(problem.Y)
-    matT = eltype(problem.X)
-    labelT = keytype(problem.label2vertex)
-    print(io, "NonLinearMVDAProblem{$(T)}")
-    print(io, "\n  ∘ $(typeof(problem.κ))")
+    print(io, "\n  ∘ $(kernel_info)")
     print(io, "\n  ∘ $(n) sample(s) ($(respT))")
     print(io, "\n  ∘ $(p) feature(s) ($(matT))")
     print(io, "\n  ∘ $(c) categories ($(labelT))")
