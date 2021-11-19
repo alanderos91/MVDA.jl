@@ -247,3 +247,110 @@ Base.iterate(r::SubproblemResult, ::Val{:objective}) = (r.objective, Val(:distan
 Base.iterate(r::SubproblemResult, ::Val{:distance}) = (r.distance, Val(:gradient))
 Base.iterate(r::SubproblemResult, ::Val{:gradient}) = (r.gradient, Val(:done))
 Base.iterate(r::SubproblemResult, ::Val{:done}) = nothing
+
+function save_cv_results(filename, replicates, grids)
+    ϵ_grid, s_grid = grids
+    delim = ','
+    open(filename, "w+") do io
+        writedlm(io, ["replicate" "fold" "epsilon" "sparsity" "time" "train" "validation" "test"], delim)
+        for (r, replicate) in enumerate(replicates)
+            for k in eachindex(replicate[1]), j in eachindex(ϵ_grid), i in eachindex(s_grid)
+                ϵ, s = ϵ_grid[j], 100*s_grid[i]
+                Tr, V, T, t = [arr[k][i,j] for arr in replicate]
+                writedlm(io, Any[r k ϵ s t Tr V T], delim)
+            end
+        end
+    end
+    return nothing
+end
+
+function cv_error(df::DataFrame)
+    # Group replicates based on hyperparameter pairs (ϵ, s).
+    gdf = groupby(df, [:replicate, :epsilon, :sparsity])
+
+    # Aggregate over folds.
+    f(a,b,c,d) = (time=sum(a), train=mean(b), validation=mean(c), test=mean(d))
+    out = combine(gdf, [:time, :train, :validation, :test] => f => AsTable)
+
+    return out
+end
+
+"""
+Returns the row index `j` corresponding to the optimal model.
+
+The input `df` must contain cross-validation errors (see [`MVDA.cv_error`](@ref)).
+Optimality is determined by the following:
+
+- Robustness: maximal deadzone radius, `epsilon`.
+- Parsimony: maximal `sparsity`.
+- Predictive: minimal classification error in `validation`.
+"""
+function optimal_model(df::AbstractDataFrame)
+    itr = zip(df.validation, df.sparsity, df.epsilon)
+    adjusted_score = [(error, 100-s, 1/ϵ) for (error, s, ϵ) in itr]
+    j = argmin(adjusted_score)
+end
+
+function cv_credible_intervals(df::DataFrame, credibility=19/20)
+    # Identify the optimal point in each replicate.
+    gdf = groupby(df, :replicate)
+    s_opt = zeros(length(gdf))
+    for (r, replicate) in enumerate(gdf)
+        j = optimal_model(replicate)
+        s_opt[r] = replicate.sparsity[j]
+    end
+
+    # Compute parameter for equal-tailed interval and define functions to aggregate along path.
+    α = (1 - credibility) / 2
+    estimate_interval(data, _α) = median(data), quantile(data, _α), quantile(data, 1-_α)
+    f = function (a, b, c, d)
+        time_md, time_lo, time_hi = estimate_interval(a, α)
+        train_md, train_lo, train_hi = estimate_interval(b, α)
+        validation_md, validation_lo, validation_hi = estimate_interval(c, α)
+        test_md, test_lo, test_hi = estimate_interval(d, α)
+        return (;
+            time_md=time_md, time_lo=time_lo, time_hi=time_hi,
+            train_md=train_md, train_lo=train_lo, train_hi=train_hi,
+            validation_md=validation_md, validation_lo=validation_lo, validation_hi=validation_hi,
+            test_md=test_md, test_lo=test_lo, test_hi=test_hi,
+        )
+    end
+
+    # Group by hyperparameter pairs (ϵ, s) and aggregate over replicates.
+    out = combine(groupby(df, [:epsilon, :sparsity]), [:time, :train, :validation, :test] => f => AsTable)
+
+    # Add optimal point credible interval to DataFrame.
+    model_md, model_lo, model_hi = estimate_interval(s_opt, α)
+    out[!, :model_md] .= model_md
+    out[!, :model_lo] .= model_lo
+    out[!, :model_hi] .= model_hi
+
+    return out
+end
+
+function plot_credible_interval(df::DataFrame, col::Symbol)
+    # Plot the credible interval for the selected metric.
+    ys, lo, hi = df[!,Symbol(col, :_md)], df[!,Symbol(col, :_lo)], df[!,Symbol(col, :_hi)]
+    xs = df.sparsity
+    lower, upper = ys - lo, hi - ys
+
+    fig = plot(
+        xlabel="Sparsity (%)",
+        ylabel=col == :time ? "Time (s)" : "Error (%)",
+        ylim=col == :time ? nothing : (-1,101),
+        xlim=(-1,101),
+        xticks=0:10:100,
+    )
+
+    # Add a point highlighting the optimal point + its credible interval.
+    s_opt, s_lo, s_hi = df[1, [:model_md, :model_lo, :model_hi]]
+    j = findlast(≤(s_opt), xs)
+    error_bars = [(s_opt - s_lo, s_hi - s_opt)]
+    str = "($(s_opt), $(round(ys[j], digits=4)))"
+    scatter!((s_opt, ys[j]), xerr=error_bars, color=:black, markersize=8, markerstrokewidth=3, label="optimal model")
+    annotate!([ (s_opt, ys[j]+5, (str, 10, :left)) ])
+
+    plot!(xs, ys, lw=3, ribbon=(lower, upper), label="95% credible interval", ls=:dash)
+
+    return fig
+end
