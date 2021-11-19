@@ -129,7 +129,7 @@ toward the target sparsity set.
 """
 function fit(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
-    fit_MVDA!(algorithm, problem, ϵ, s, extras, (true,false,); kwargs...)
+    MVDA.fit!(algorithm, problem, ϵ, s, extras, (true,false,); kwargs...)
 end
 
 """
@@ -156,7 +156,7 @@ Same as `fit_MVDA(algorithm, problem, ϵ, s)`, but with preallocated data struct
 - `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 
-See also: [`anneal!`](@ref) for additional keyword arguments applied at the annealing step.
+See also: [`MVDA.anneal!`](@ref) for additional keyword arguments applied at the annealing step.
 """
 function fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real,
     extras=nothing,
@@ -199,7 +199,7 @@ function fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real,
     for iter in 1:nouter
         # Solve minimization problem for fixed rho.
         verbose && print("\n",iter,"  ρ = ",ρ)
-        result = anneal!(algorithm, problem, ϵ, ρ, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
+        result = MVDA.anneal!(algorithm, problem, ϵ, ρ, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
 
         # Update total iteration count.
         iters += result.iters
@@ -240,7 +240,7 @@ Solve the `ρ`-penalized optimization problem at sparsity level `s` with deadzon
 """
 function anneal(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::Real, s::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing)
-    anneal!(algorithm, problem, ϵ, ρ, s, extras, (true,true,); kwargs...)
+    MVDA.anneal!(algorithm, problem, ϵ, ρ, s, extras, (true,true,); kwargs...)
 end
 
 """
@@ -338,164 +338,133 @@ function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::R
 end
 
 """
-    cv_MVDA(algorithm, problem, test_set, ϵ_grid, s_grid; kwargs...)
+    cv_MVDA(algorithm, problem, grids; [at], [kwargs...])
 
-Compute scores for multiple models parameterized by hyperparameters `s` and `ϵ` via K-fold cross-validation.
+Split data in `problem` into cross-validation and a test sets, then run cross-validation over the `grids`.
 
-- `problem` contains data for cross-validation and should enter with an initial guess for model parameters (i.e. in `problem.coeff`).
-- `test_set` is separate from the cross-validation data.
-- `ϵ_grid` should be an increasing sequence of nonnegative values.
-- `s_grid` should be an increasing sequence of sparsity values (dense to sparse) between 0 and 1.
+# Keyword Arguments
+
+- `at`: A value between `0` and `1` indicating the proportion of samples/instances used for cross-validation, with remaining samples used for a test set (default=`0.8`).
+
+See also: [`MVDA.cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, dataset_split::Tuple{Any,Any})`](@ref)
 """
-function cv_MVDA(algorithm::AbstractMMAlg, problem::MVDAProblem, cv_set, test_set, ϵ_grid, s_grid;
-    nfolds::Int=10,
+function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}; at::Real=0.8, kwargs...) where {E,S}
+    # Split data into cross-validation and test sets.
+    @unpack p, Y, X, intercept = problem
+    dataset_split = splitobs((Y, view(X, :, 1:p)), at=at, obsdim=1)
+    MVDA.cv(algorithm, problem, grids, dataset_split; kwargs...)
+end
+
+"""
+    cv_MVDA(algorithm, problem, grids, dataset_split; [kwargs...])
+
+Run k-fold cross-validation over hyperparameters `(ϵ, s)` for deadzone radius and sparsity level, respectively.
+
+The given `problem` should enter with initial model parameters in `problem.coeff.all`.
+Hyperparameters are specified in `grids = (ϵ_grid, s_grid)`, and data subsets are given as `dataset_split = (cv_set, test_set)`.
+
+# Keyword Arguments
+
+- `nfolds`: The number of folds to run in cross-validation.
+- `scoref`: A function that evaluates a classifier over training, validation, and testing sets (default uses misclassification error).
+- `show_progress`: Toggles progress bar.
+
+Additional arguments are propagated to `fit` and `anneal`. See also [`MVDA.fit`](@ref) and [`MVDA.anneal`](@ref).
+"""
+function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, dataset_split::Tuple{Any,Any};
+    nfolds::Int=5,
     scoref::Function=DEFAULT_SCORE_FUNCTION,
     cb::Function=DEFAULT_CALLBACK,
-    progressbar::Bool=true,
-    kwargs...
-    )
-    # Initialize model object; just used to pass around coefficients.
-    @unpack Y, X = problem
-    _, p, c = probdims(problem)
-    T = floattype(problem)
-    model = MVDAProblem{T}(Y, X, problem.vertex, problem.label2vertex, problem.vertex2label, problem.intercept,
-        deepcopy(problem.coeff), deepcopy(problem.coeff_prev),
-        deepcopy(problem.proj), problem.res, deepcopy(problem.grad)
-    )
-
-    # Set initial model coefficients.
-    init_coeff = problem.coeff.all
-
+    show_progress::Bool=true,
+    kwargs...) where {E,S}
     # Initialize the output.
-    tmp = scoref(model, test_set, test_set, test_set)
-    score = Array{typeof(tmp)}(undef, length(s_grid), length(ϵ_grid), nfolds)
+    cv_set, test_set = dataset_split
+    ϵ_grid, s_grid = grids
+    nϵ, ns = length(ϵ_grid), length(s_grid)
+    alloc_score_arrays(a, b, c) = [Matrix{Float64}(undef, a, b) for _ in 1:c]
+    result = (;
+        train=alloc_score_arrays(ns, nϵ, nfolds),
+        validation=alloc_score_arrays(ns, nϵ, nfolds),
+        test=alloc_score_arrays(ns, nϵ, nfolds),
+        time=alloc_score_arrays(ns, nϵ, nfolds),
+    )
 
     # Run cross-validation.
-    if progressbar
-        nvals = length(ϵ_grid) * length(s_grid)
-        progress_bar = Progress(nfolds*nvals, 1, "Running CV w/ $(algorithm)... ")
+    if show_progress
+        progress_bar = Progress(nfolds * nϵ * ns, 1, "Running CV w/ $(algorithm)... ")
     end
 
     for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
         # Retrieve the training set and validation set.
         train_set, validation_set = fold
-        train_Y, train_X = train_set
-        train_n = size(train_Y, 1)
-        train_res = __allocate_res__(T, train_n, p+problem.intercept, c)
+        train_Y, train_X = getobs(train_set, obsdim=1)
         
         # Create a problem object for the training set.
-        train_problem = MVDAProblem{T}(copy(train_Y), copy(train_X),
-            problem.vertex, problem.label2vertex, problem.vertex2label, problem.intercept,
-            deepcopy(problem.coeff), deepcopy(problem.coeff_prev),
-            deepcopy(problem.proj), train_res, deepcopy(problem.grad),
-        )
+        train_problem = change_data(problem, train_Y, train_X)
         extras = __mm_init__(algorithm, train_problem, nothing)
 
         for (j, ϵ) in enumerate(ϵ_grid)
             # Set initial model parameters.
-            copyto!(train_problem.coeff.all, init_coeff)
-
+            for idx in eachindex(train_problem.coeff.all)
+                train_problem.coeff.all[idx] = problem.coeff.all[idx]
+            end
+            
             for (i, s) in enumerate(s_grid)
-                # model_size = sparsity_to_k(problem, s)
-
-                # Update data structures due to change in sparsity.
-                # __mm_update_sparsity__(algorithm, problem, ϵ, one(T), model_size, extras)
-
-                # Obtain solution as function of (s, ϵ).
-                r = fit_MVDA!(algorithm, train_problem, ϵ, s, extras, (false, false,); cb=cb, kwargs...)
-                copyto!(model.coeff.all, train_problem.coeff.all)
-                copyto!(model.proj.all, train_problem.proj.all)
-
-                # cb(k, problem, train_problem, (train_set, validation_set, test_set), ϵ, s, model_size, r)
+                # Obtain solution as function of (ϵ, s).
+                result.time[k][i,j] = @elapsed MVDA.fit!(algorithm, train_problem, ϵ, s, extras, (true, false,);
+                    cb=cb, kwargs...
+                )
+                copyto!(train_problem.coeff.all, train_problem.proj.all)
 
                 # Evaluate the solution.
-                score[i,j,k] = scoref(model, train_set, validation_set, test_set)
+                r = scoref(train_problem, train_set, validation_set, test_set)
+                for (arr, val) in zip(result, r)
+                    arr[k][i,j] = val
+                end
 
                 # Update the progress bar.
-                if progressbar
-                    next!(progress_bar, showvalues=[(:fold, k), (:sparsity, s), (:ϵ, ϵ)])
+                if show_progress
+                    spercent = string(round(100*s, digits=6), '%')
+                    next!(progress_bar, showvalues=[(:fold, k), (:sparsity, spercent), (:ϵ, ϵ)])
                 end
             end
         end
     end
 
-    # Package the result.
-    result = (;
-        epsilon=ϵ_grid,
-        sparsity=s_grid,
-        score=score,
-    )
-
     return result
 end
 
-# function cv_MVDA(algorithm, problem::NonLinearMVDAProblem, cv_set, test_set, ϵ_grid, s_grid;
-#     nfolds::Int=10,
-#     scoref::Function=DEFAULT_SCORE_FUNCTION,
-#     cb::Function=DEFAULT_CALLBACK,
-#     progressbar::Bool=true,
-#     kwargs...
-#     )
-#     # Initialize model object; just used to pass around coefficients.
-#     @unpack Y, X = problem
-#     _, p, c = probdims(problem)
-#     T = floattype(problem)
+function cv_estimation(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}; at::Real=0.8, kwargs...) where {E,S}
+    # Split data into cross-validation and test sets.
+    @unpack p, Y, X, intercept = problem
+    dataset_split = splitobs((Y, view(X, :, 1:p)), at=at, obsdim=1)
+    MVDA.cv_estimation(algorithm, problem, grids, dataset_split; kwargs...)
+end
 
-#     # Initialize the output.
-#     tmp = scoref(problem, test_set, test_set, test_set)
-#     score = Array{typeof(tmp)}(undef, length(s_grid), length(ϵ_grid), nfolds)
+function cv_estimation(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, dataset_split::Tuple{Any,Any};
+    nreplicates::Int=10,
+    show_progress::Bool=true,
+    rng::AbstractRNG=StableRNG(1903),
+    kwargs...) where {E,S}
+    # Retrieve subsets and create index set into cross-validation set.
+    cv_set, test_set = dataset_split
+    idx = collect(axes(cv_set[2], 1))
 
-#     # Run cross-validation.
-#     if progressbar
-#         nvals = length(ϵ_grid) * length(s_grid)
-#         progress_bar = Progress(nfolds*nvals, 1, "Running CV w/ $(algorithm)... ")
-#     end
+    # Allocate output.
+    replicate = NamedTuple[]
 
-#     for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
-#         # Retrieve the training set and validation set.
-#         train_set, validation_set = fold
-#         train_Y, train_X = train_set
-#         train_n = size(train_Y, 1)
-        
-#         # Create a problem object for the training set.
-#         train_problem = remake(problem, copy(train_Y), copy(train_X))
-#         extras = __mm_init__(algorithm, train_problem, nothing)
+    @showprogress "Running CV w/ $(algorithm)... " for r in 1:nreplicates
+        # Shuffle cross-validation data.
+        randperm!(rng, idx)
+        cv_shuffled = shuffleobs(cv_set, obsdim=1, rng=rng)
 
-#         # Select correct subset of initial model parameters.
-#         init_coeff = @view problem.coeff.all[1:train_n, :]
-#         init_intercept = @view problem.coeff.all[end, :]
+        # Run k-fold cross-validation and store results.
+        result = MVDA.cv(algorithm, problem, grids, (cv_shuffled, test_set); show_progress=false, kwargs...)
+        push!(replicate, result)
+    end
 
-#         for (j, ϵ) in enumerate(ϵ_grid)
-#             # Set initial model parameters.
-#             @views begin
-#                 copyto!(train_problem.coeff.all[1:train_n, :], init_coeff)
-#                 copyto!(train_problem.coeff.all[end, :], init_intercept)
-#             end
-
-#             for (i, s) in enumerate(s_grid)
-#                 # Obtain solution as function of (s, ϵ).
-#                 r = fit_MVDA!(algorithm, train_problem, ϵ, s, extras, (false, false,); cb=cb, kwargs...)
-                
-#                 # Evaluate the solution.
-#                 score[i,j,k] = scoref(train_problem, train_set, validation_set, test_set)
-
-#                 # Update the progress bar.
-#                 if progressbar
-#                     next!(progress_bar, showvalues=[(:fold, k), (:sparsity, s), (:ϵ, ϵ)])
-#                 end
-#             end
-#         end
-#     end
-
-#     # Package the result.
-#     result = (;
-#         epsilon=ϵ_grid,
-#         sparsity=s_grid,
-#         score=score,
-#     )
-
-#     return result
-# end
+    return replicate
+end
 
 # function fit_regMVDA(algorithm, problem, ϵ::Real, λ::Real; kwargs...)
 #     # Initialize any additional data structures.
@@ -622,6 +591,6 @@ end
 # end
 
 export IterationResult, SubproblemResult
-export MVDAProblem, SD, MMSVD, # CyclicVDA
+export MVDAProblem, SD, MMSVD # CyclicVDA
 
 end

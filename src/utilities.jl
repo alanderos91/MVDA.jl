@@ -66,20 +66,20 @@ function __evaluate_gradient__(problem, ρ, extras)
     return nothing
 end
 
-function __evaluate_gradient_reg__(problem, λ, extras)
-    @unpack res, grad = problem
-    n, _, _ = probdims(problem)
-    X = get_design_matrix(problem)
+# function __evaluate_gradient_reg__(problem, λ, extras)
+#     @unpack res, grad = problem
+#     n, _, _ = probdims(problem)
+#     X = get_design_matrix(problem)
 
-    for j in eachindex(grad.dim)
-        # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ λI] * Rₘ,ⱼ
-        a = 1 / sqrt(n)
-        mul!(grad.dim[j], X', res.weighted.dim[j])
-        axpby!(λ, problem.coeff.dim[j], -a, grad.dim[j])
-    end
+#     for j in eachindex(grad.dim)
+#         # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ λI] * Rₘ,ⱼ
+#         a = 1 / sqrt(n)
+#         mul!(grad.dim[j], X', res.weighted.dim[j])
+#         axpby!(λ, problem.coeff.dim[j], -a, grad.dim[j])
+#     end
 
-    return nothing
-end
+#     return nothing
+# end
 
 """
 Evaluate the penalized least squares criterion. Also updates the gradient.
@@ -99,18 +99,18 @@ function __evaluate_objective__(problem, ϵ, ρ, extras)
     return IterationResult(loss, obj, dist, gradsq)
 end
 
-function __evaluate_objective_reg__(problem, ϵ, λ, extras)
-    @unpack res, grad = problem
+# function __evaluate_objective_reg__(problem, ϵ, λ, extras)
+#     @unpack res, grad = problem
 
-    __evaluate_residuals__(problem, ϵ, extras, true, false, false)
-    __evaluate_gradient_reg__(problem, λ, extras)
+#     __evaluate_residuals__(problem, ϵ, extras, true, false, false)
+#     __evaluate_gradient_reg__(problem, λ, extras)
 
-    loss = norm(res.weighted.all)^2 # 1/n * ∑ᵢ (Zᵢ - Bᵀxᵢ)²
-    objective = 1//2 * (loss + λ * norm(problem.coeff.all))
-    gradsq = norm(grad.all)^2
+#     loss = norm(res.weighted.all)^2 # 1/n * ∑ᵢ (Zᵢ - Bᵀxᵢ)²
+#     objective = 1//2 * (loss + λ * norm(problem.coeff.all))
+#     gradsq = norm(grad.all)^2
 
-    return IterationResult(loss, objective, 0.0, gradsq)
-end
+#     return IterationResult(loss, objective, 0.0, gradsq)
+# end
 
 """
 Apply acceleration to the current iterate `x` based on the previous iterate `y`
@@ -136,13 +136,13 @@ end
 """
 Map a sparsity level `s` to an integer `k`, assuming `n` elements.
 """
-sparsity_to_k(problem::MVDAProblem, s) = sparsity_to_k(problem.kernel, problem, s)
-sparsity_to_k(::Nothing, problem::MVDAProblem, s) = round(Int, (1-s) * problem.p)
-sparsity_to_k(::Kernel, problem::MVDAProblem, s) = round(Int, (1-s)*problem.n)
+sparsity_to_k(problem::MVDAProblem, s) = __sparsity_to_k__(problem.kernel, problem, s)
+__sparsity_to_k__(::Nothing, problem::MVDAProblem, s) = round(Int, (1-s) * problem.p)
+__sparsity_to_k__(::Kernel, problem::MVDAProblem, s) = round(Int, (1-s)*problem.n)
 
-get_projection_indices(problem::MVDAProblem) = get_projection_indices(problem.kernel, problem)
-get_projection_indices(::Nothing, problem::MVDAProblem) = 1:problem.p
-get_projection_indices(::Kernel, problem::MVDAProblem) = 1:problem.n
+get_projection_indices(problem::MVDAProblem) = __get_projection_indices__(problem.kernel, problem)
+__get_projection_indices__(::Nothing, problem::MVDAProblem) = 1:problem.p
+__get_projection_indices__(::Kernel, problem::MVDAProblem) = 1:problem.n
 
 """
 Apply a projection to model coefficients.
@@ -159,8 +159,6 @@ function apply_projection(projection, problem, k)
     else
         projection(proj.all, k)
     end
-
-    # correction step, select optimal solution
 
     return proj.all
 end
@@ -190,7 +188,10 @@ __do_nothing_callback__(fold, problem, train_problem, data, lambda, sparsity, mo
 __svd_wrapper__(A::StridedMatrix) = svd(A)
 __svd_wrapper__(A::AbstractMatrix) = svd!(copy(A))
 
-function prediction_error(model, train_set, validation_set, test_set)
+function prediction_error(model::MVDAProblem, train_set, validation_set, test_set)
+    # Extract number of features to make predictions consistent.
+    @unpack p = model
+
     # Extract data for each set.
     Tr_Y, Tr_X = train_set
     V_Y, V_X = validation_set
@@ -201,16 +202,16 @@ function prediction_error(model, train_set, validation_set, test_set)
     T_label = map(yᵢ -> model.vertex2label[yᵢ], eachrow(T_Y))
 
     # Make predictions on each subset.
-    Tr_call = classify(model, Tr_X)
-    V_call = classify(model, V_X)
-    T_call = classify(model, T_X)
+    Tr_call = classify(model, view(Tr_X, :, 1:p))
+    V_call = classify(model, view(V_X, :, 1:p))
+    T_call = classify(model, view(T_X, :, 1:p))
 
     # Evaluate errors on each subset.
     Tr = 100 * (1 - sum(Tr_call .== Tr_label) / length(Tr_label))
     V = 100 * (1 - sum(V_call .== V_label) / length(V_label))
     T = 100 * (1 - sum(T_call .== T_label) / length(T_label))
 
-    return [Tr, V, T]
+    return (Tr, V, T)
 end
 
 struct IterationResult

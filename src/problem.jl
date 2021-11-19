@@ -235,19 +235,31 @@ function MVDAProblem(labels, data; intercept::Bool=true, kernel::Union{Nothing,K
 end
 
 """
-    remake(problem::MVDAProblem, labels, data)
+    change_data(problem::MVDAProblem, labels::AbstractVector, data)
 
 Create a new `MVDAProblem` instance from the labeled dataset `(label, data)` using the vertex encoding from the reference `problem`.
 """
-function remake(problem::MVDAProblem, labels, data)
+function change_data(problem::MVDAProblem, labels::AbstractVector, data)
+    @unpack label2vertex = problem          # extract encoding-dependent fields + problem info
+    Y = create_Y(T, labels, label2vertex)   # create response matrix
+    change_data(problem, Y, data)           # dispatch
+end
+
+"""
+    change_data(problem::MVDAProblem, Y::AbstractMatrix, data)
+
+Create a new `MVDAProblem` instance from the labeled dataset `(Y, data)` using the vertex encoding from the reference `problem`.
+
+Assumes `Y` already contains vertex assignments consistent with the encoding in `problem`.
+"""
+function change_data(problem::MVDAProblem, Y::AbstractMatrix, data)
     # extract encoding-dependent fields + problem info
     @unpack vertex, label2vertex, vertex2label, intercept, kernel = problem
-    n, p, c = length(labels), problem.p, problem.c
+    n, p, c = size(Y, 1), problem.p, problem.c
     T = floattype(problem)
 
-    # create new design and response matrices
+    # create new design matrices
     X, K = create_X_and_K(kernel, T, data, intercept)
-    Y = create_Y(T, labels, label2vertex)
 
     # allocate data structures for coefficients, projections, residuals, and gradient
     coeff, coeff_prev, proj, res, grad = __allocate_problem_arrays__(kernel, T, n, p, c, intercept)
@@ -297,12 +309,19 @@ See also: [`predict(problem::MVDAProblem, x::AbstractVector)`](@ref), [`classify
 """
 predict(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> predict(problem, xᵢ), eachrow(X))
 
-__predict__(::Nothing, problem::MVDAProblem, x::AbstractVector) = problem.proj.all' * x
+function __predict__(::Nothing, problem::MVDAProblem, x::AbstractVector)
+    @unpack p, proj, intercept = problem
+    B = view(proj.all, 1:p, :)
+    B0 = view(proj.all, p+intercept, :)
+    y = B' * x
+    intercept && (y += B0)
+    return y
+end
 
 function __predict__(::Kernel, problem::MVDAProblem, x::AbstractVector)
-    _, _, c = probdims(problem)
+    c = problem.c
     κ = problem.kernel
-    Γ = problem.coeff.all
+    Γ = problem.proj.all
     ϕ = zeros(c-1)
     for j in eachindex(ϕ)
         for (i, xᵢ) in enumerate(eachrow(problem.X))
