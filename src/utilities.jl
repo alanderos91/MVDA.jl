@@ -275,6 +275,31 @@ function cv_error(df::DataFrame)
     return out
 end
 
+function plot_cv_paths(df::DataFrame, col::Symbol)
+    # Group by replicate and initialize figure based on selected column.
+    gdf = groupby(df, :replicate)
+    n = length(gdf)
+    fig = plot(
+        xlabel="Sparsity (%)",
+        ylabel=col == :time ? "Time (s)" : "Error (%)",
+        ylim=col == :time ? nothing : (-1,101),
+        xlim=(-1,101),
+        xticks=0:10:100,
+        yticks=col == :time ? nothing : 0:10:100,
+    )
+
+    # Plot paths from each replicate.
+    foreach(path -> plot!(path[!,:sparsity], path[!,col], lw=3, color=:black, alpha=1/n, label=nothing), gdf)
+
+    # Highlight the mean and median paths.
+    f(a) = (; median=median(a), mean=mean(a))
+    tmp = combine(groupby(df, [:epsilon, :sparsity]), [col] => f => AsTable)
+    plot!(tmp.sparsity, tmp.mean, lw=3, color=:red, ls=:dash, label=nothing)   # mean
+    plot!(tmp.sparsity, tmp.median, lw=3, color=:blue, ls=:dot, label=nothing) # median
+    
+    return fig
+end
+
 """
 Returns the row index `j` corresponding to the optimal model.
 
@@ -291,7 +316,7 @@ function optimal_model(df::AbstractDataFrame)
     j = argmin(adjusted_score)
 end
 
-function cv_credible_intervals(df::DataFrame, credibility=19/20)
+function credible_intervals(df::DataFrame, credibility=19/20)
     # Identify the optimal point in each replicate.
     gdf = groupby(df, :replicate)
     s_opt = zeros(length(gdf))
@@ -328,7 +353,7 @@ function cv_credible_intervals(df::DataFrame, credibility=19/20)
     return out
 end
 
-function plot_credible_interval(df::DataFrame, col::Symbol)
+function plot_credible_intervals(df::DataFrame, col::Symbol)
     # Plot the credible interval for the selected metric.
     ys, lo, hi = df[!,Symbol(col, :_md)], df[!,Symbol(col, :_lo)], df[!,Symbol(col, :_hi)]
     xs = df.sparsity
