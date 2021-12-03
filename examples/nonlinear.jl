@@ -1,14 +1,23 @@
 using CSV, DataFrames, KernelFunctions, MVDA, Plots, StableRNGs
-using LinearAlgebra
+using LinearAlgebra, Statistics
 
 BLAS.set_num_threads(8)
 
 run = function(dir, example, data, sparse2dense::Bool=false; at::Real=0.8, kwargs...)
     # Create MVDAProblem instance w/ RBFKernel and construct grids.
     @info "Creating MVDAProblem for $(example)"
-    problem = MVDAProblem(data..., intercept=true, kernel=RBFKernel())
+    dist = Float64[]
+    @views for j in axes(data[2], 1), i in axes(data[2], 1)
+        yᵢ, xᵢ = data[1][i], data[2][i, :]
+        yⱼ, xⱼ = data[1][j], data[2][j, :]
+        if yᵢ != yⱼ
+            push!(dist, sqrt(dot(xᵢ, xᵢ) - 2*dot(xᵢ, xⱼ) + dot(xⱼ, xⱼ)))
+        end
+    end
+    σ = 13/10 * median(dist)
+    problem = MVDAProblem(data..., intercept=true, kernel=σ*RBFKernel())
     n, p, c = MVDA.probdims(problem)
-    n_cv = round(Int, n*at)
+    n_cv = round(Int, n*at*4//5)
     fill!(problem.coeff.all, 1/(n_cv+1))
     ϵ_grid = [MVDA.maximal_deadzone(problem)]
     s_grid = sort!([1-k/n_cv for k in n_cv:-1:0], rev=sparse2dense)
@@ -59,6 +68,7 @@ run = function(dir, example, data, sparse2dense::Bool=false; at::Real=0.8, kwarg
         plot!(fig; title=title, options...)
         savefig(fig, partial_filename*"-summary=$(metric).png")
     end
+    println()
 
     return nothing
 end
@@ -71,18 +81,18 @@ data = MVDA.generate_nested_circle(nsamples, nclasses; p=8//10, rng=StableRNG(19
 run("/home/alanderos/Desktop/VDA/", "circles", data, false;
     at=n_cv/nsamples,   # CV set / Test set split
     nfolds=5,           # number of folds
-    nreplicates=100,    # number of CV replicates
+    nreplicates=50,     # number of CV replicates
 )
 
 # Waveform
 n_cv, n_test = 375, 10^3
 nsamples = n_cv + n_test
 nfeatures = 21
-data = MVDA.generate_waveform(nsamples, nfeatures; rng=MersenneTwister(1903))
+data = MVDA.generate_waveform(nsamples, nfeatures; rng=StableRNG(1903))
 run("/home/alanderos/Desktop/VDA/", "waveform", data, false;
     at=n_cv/nsamples,   # CV set / Test set split
     nfolds=5,           # number of folds
-    nreplicates=100,    # number of CV replicates
+    nreplicates=50,     # number of CV replicates
 )
 
 # Zoo
@@ -90,8 +100,8 @@ df = MVDA.dataset("zoo")
 data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end]))
 run("/home/alanderos/Desktop/VDA/", "zoo", data, false;
     at=0.8,             # CV set / Test set split
-    nfolds=5,           # number of folds
-    nreplicates=100,    # number of CV replicates
+    nfolds=3,           # number of folds
+    nreplicates=50,     # number of CV replicates
 )
 
 # Vowel
@@ -100,5 +110,5 @@ data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end]))
 run("/home/alanderos/Desktop/VDA/", "vowel", data, false;
     at=0.533333,        # CV set / Test set split
     nfolds=5,           # number of folds
-    nreplicates=100,    # number of CV replicates
+    nreplicates=50,     # number of CV replicates
 )
