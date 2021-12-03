@@ -3,7 +3,7 @@ module MVDA
 using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using Parameters, Printf, MLDataUtils, ProgressMeter
-using LinearAlgebra, Random, Statistics, StatsBase, StableRNGs
+using LinearAlgebra, MKL, Random, Statistics, StatsBase, StableRNGs
 using KernelFunctions
 using DelimitedFiles, Plots
 
