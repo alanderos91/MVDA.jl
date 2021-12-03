@@ -397,8 +397,15 @@ function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, d
 
     for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
         # Retrieve the training set and validation set.
+        # TODO: Does this guarantee copies?
         train_set, validation_set = fold
         train_Y, train_X = getobs(train_set, obsdim=1)
+        val_Y, val_X = getobs(validation_set, obsdim=1)
+        test_Y, test_X = getobs(test_set, obsdim=1)
+        
+        # Standardize ALL data based on the training set.
+        F = StatsBase.fit(ZScoreTransform, train_X, dims=1)
+        foreach(X -> StatsBase.transform!(F, X), (train_X, val_X, test_X))
         
         # Create a problem object for the training set.
         train_problem = change_data(problem, train_Y, train_X)
@@ -418,7 +425,7 @@ function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, d
                 copyto!(train_problem.coeff.all, train_problem.proj.all)
 
                 # Evaluate the solution.
-                r = scoref(train_problem, train_set, validation_set, test_set)
+                r = scoref(train_problem, (train_Y, train_X), (val_Y, val_X), (test_Y, test_X))
                 for (arr, val) in zip(result, r)
                     arr[k][i,j] = val
                 end
@@ -449,19 +456,25 @@ function cv_estimation(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tu
     kwargs...) where {E,S}
     # Retrieve subsets and create index set into cross-validation set.
     cv_set, test_set = dataset_split
-    idx = collect(axes(cv_set[2], 1))
 
-    # Allocate output.
+    if show_progress
+        progress_bar = Progress(nreplicates, 1, "Running CV w/ $(algorithm)... ")
+    end
+
+    # Replicate CV procedure several times.
     replicate = NamedTuple[]
-
-    @showprogress "Running CV w/ $(algorithm)... " for r in 1:nreplicates
+    for r in 1:nreplicates
         # Shuffle cross-validation data.
-        randperm!(rng, idx)
         cv_shuffled = shuffleobs(cv_set, obsdim=1, rng=rng)
 
         # Run k-fold cross-validation and store results.
         result = MVDA.cv(algorithm, problem, grids, (cv_shuffled, test_set); show_progress=false, kwargs...)
         push!(replicate, result)
+
+        # Update the progress bar.
+        if show_progress
+            next!(progress_bar, showvalues=[(:replicate, r),])
+        end
     end
 
     return replicate
