@@ -372,3 +372,8 @@ function Base.show(io::IO, problem::MVDAProblem)
     print(io, "\n  ∘ $(c) categories ($(labelT))")
     print(io, "\n  ∘ intercept? $(problem.intercept)")
 end
+
+function maximal_deadzone(problem::MVDAProblem)
+    c = problem.c
+    ifelse(c == 2, 0.5, 1//2 * sqrt(2*c/(c-1)))
+end
