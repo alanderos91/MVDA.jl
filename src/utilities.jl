@@ -371,9 +371,21 @@ function plot_credible_intervals(df::DataFrame, col::Symbol)
     s_opt, s_lo, s_hi = df[1, [:model_md, :model_lo, :model_hi]]
     j = findlast(≤(s_opt), xs)
     error_bars = [(s_opt - s_lo, s_hi - s_opt)]
-    str = "($(s_opt), $(round(ys[j], digits=4)))"
+    str = "($(round(s_opt, digits=4)), $(round(ys[j], digits=4)))"
     scatter!((s_opt, ys[j]), xerr=error_bars, color=:black, markersize=6, markerstrokewidth=3, label="optimal model")
-    annotate!([ (s_opt-1.25, ys[j]+10, (str, 10, :left)) ])
+    _x, _y = s_opt, ys[j]
+    if _x + 10 > 100
+        _x -= 10
+    else
+        _x -= 1.25
+    end
+
+    if _y + 20 > 100
+        _y -= 10
+    else
+        _y += 5
+    end
+    annotate!([ (_x, _y, (str, 10, :left)) ])
 
     plot!(xs, ys, lw=3, ribbon=(lower, upper), label="95% credible interval", ls=:dash)
 
