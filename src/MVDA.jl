@@ -405,6 +405,20 @@ function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, d
         
         # Standardize ALL data based on the training set.
         F = StatsBase.fit(ZScoreTransform, train_X, dims=1)
+        has_nan = any(isnan, F.scale) || any(isnan, F.mean)
+        has_inf = any(isinf, F.scale) || any(isinf, F.mean)
+        has_zero = any(iszero, F.scale)
+        if has_nan
+            error("Detected NaN in z-score.")
+        elseif has_inf
+            error("Detected Inf in z-score.")
+        elseif has_zero
+            for idx in eachindex(F.scale)
+                x = F.scale[idx]
+                F.scale[idx] = ifelse(iszero(x), one(x), x)
+            end
+        end
+
         foreach(X -> StatsBase.transform!(F, X), (train_X, val_X, test_X))
         
         # Create a problem object for the training set.
