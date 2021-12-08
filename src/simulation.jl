@@ -1,4 +1,4 @@
-function generate_nested_circle(n::Int, c::Int=2; p::Real=8//10, rng::AbstractRNG=StableRNG(1234))
+function simulate_nested_circles(n::Int, c::Int=2; p::Real=8//10, rng::AbstractRNG=StableRNG(1234))
     # allocate outputs
     X = Matrix{Float64}(undef, n, 2)
     class = Vector{Int}(undef, n)
@@ -6,7 +6,7 @@ function generate_nested_circle(n::Int, c::Int=2; p::Real=8//10, rng::AbstractRN
     # for each sample...
     for i in axes(X, 1)
         # generate a point (x, y) via polar coordinates
-        r = rand(rng) * c
+        r = rand(rng) * sqrt(c)
         θ = 2*π * rand(rng)
         x = r * cos(θ)
         y = r * sin(θ)
@@ -27,7 +27,7 @@ function generate_nested_circle(n::Int, c::Int=2; p::Real=8//10, rng::AbstractRN
     return class, X
 end
 
-function generate_waveform(n::Int, p::Int; m::Int=6, r::Int=4, s::Int=11, rng::AbstractRNG=StableRNG(1234))
+function simulate_waveform(n::Int, p::Int; m::Int=6, r::Int=4, s::Int=11, rng::AbstractRNG=StableRNG(1234))
     # allocate outputs
     X = Matrix{Float64}(undef, n, p)
     class = Vector{Int}(undef, n)
@@ -84,4 +84,25 @@ function simulate_WS2007(n::Int, p::Int, c::Int, nsamples::Int, d::Real; rng::Ab
     idx = randperm(rng, n)
     targets, X = targets[idx], X[idx,:]
     return targets, X
+end
+
+function simulate_gaussian_clouds(n, c::Int=3; sigma::Real=1.0, rng::AbstractRNG=StableRNG(1234))
+    # Define one half of cluster centers.
+    centers = [(k, (k-1)*π / c) for k in 1:c]
+
+    # Initialize data matrix with iid N(0,1) variates
+    target, X = Vector{Int}(undef, n), randn(rng, n, 2)
+    σ = sigma
+
+    for i in axes(X, 1)
+        # Sample a center uniformly from the three classes and randomly reflect it.
+        (class, θ) = rand(rng, centers)
+        rand(rng, (true, false)) && (θ += π)
+
+        X[i,1] = cos(θ) + σ * X[i,1]
+        X[i,2] = sin(θ) + σ * X[i,2]
+        target[i] = class
+    end
+
+    return target, X
 end
