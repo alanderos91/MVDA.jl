@@ -6,14 +6,14 @@ BLAS.set_num_threads(8)
 add_model_size_guide = function(fig, N)
     # Compute ticks based on maximum model size N.
     if N > 16
-        xticks = collect(N .* range(0, 1, length=11))
+        xticks = collect(round.(Int, N .* range(0, 1, length=11)))
     else
         xticks = collect(0:N)
     end
     sort!(xticks, rev=true)
 
     # Register figure inside main subplot and append extra x-axis.
-    model_size_guide = plot(yticks=nothing, xticks=xticks, xlim=(0,N), xlabel="Model Size", xflip=true)
+    model_size_guide = plot(yticks=nothing, xticks=xticks, xlim=(-1,N+1), xlabel="# Support Vectors", xflip=true)
     full_figure = plot(fig, model_size_guide, layout=@layout [a{1.0h}; b{1e-8h}])
 
     return full_figure
@@ -97,42 +97,61 @@ run = function(dir, example, data, sparse2dense::Bool=false; at::Real=0.8, nfold
     return nothing
 end
 
+# Gaussian Clouds
+ex1 = function()
+    n_cv, n_test = 250, 10^3
+    nsamples = n_cv + n_test
+    nclasses = 3
+    data = MVDA.simulate_gaussian_clouds(nsamples, nclasses; sigma=0.25, rng=StableRNG(1903))
+    (data, "clouds", 5, n_cv / nsamples, false)
+end
+
 # Nested Circles
-n_cv, n_test = 250, 10^3
-nsamples = n_cv + n_test
-nclasses = 3
-data = MVDA.generate_nested_circle(nsamples, nclasses; p=8//10, rng=StableRNG(1903))
-run("/home/alanderos/Desktop/VDA/", "circles", data, false;
-    at=n_cv/nsamples,   # CV set / Test set split
-    nfolds=5,           # number of folds
-    nreplicates=50,     # number of CV replicates
-)
+ex2 = function()
+    n_cv, n_test = 250, 10^3
+    nsamples = n_cv + n_test
+    nclasses = 3
+    data = MVDA.simulate_nested_circles(nsamples, nclasses; p=8//10, rng=StableRNG(1903))
+    (data, "circles", 5, n_cv / nsamples, false)
+end
 
 # Waveform
-n_cv, n_test = 375, 10^3
-nsamples = n_cv + n_test
-nfeatures = 21
-data = MVDA.generate_waveform(nsamples, nfeatures; rng=StableRNG(1903))
-run("/home/alanderos/Desktop/VDA/", "waveform", data, false;
-    at=n_cv/nsamples,   # CV set / Test set split
-    nfolds=5,           # number of folds
-    nreplicates=50,     # number of CV replicates
-)
+ex3 = function()
+    n_cv, n_test = 375, 10^3
+    nsamples = n_cv + n_test
+    nfeatures = 21
+    data = MVDA.simulate_waveform(nsamples, nfeatures; rng=StableRNG(1903))
+    (data, "waveform", 5, n_cv / nsamples, false)
+end
 
 # Zoo
-df = MVDA.dataset("zoo")
-data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end]))
-run("/home/alanderos/Desktop/VDA/", "zoo", data, false;
-    at=0.9,             # CV set / Test set split
-    nfolds=3,           # number of folds
-    nreplicates=50,     # number of CV replicates
-)
+ex4 = function()
+    df = MVDA.dataset("zoo")
+    data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end]))
+    (data, "zoo", 3, 0.9, false)
+end
 
 # Vowel
-df = MVDA.dataset("vowel")
-data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end]))
-run("/home/alanderos/Desktop/VDA/", "vowel", data, false;
-    at=0.533333,        # CV set / Test set split
-    nfolds=5,           # number of folds
-    nreplicates=50,     # number of CV replicates
-)
+ex5 = function()
+    df = MVDA.dataset("vowel")
+    data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end]))
+    (data, "vowel", 5, 0.533333, false)
+end
+
+# HAR
+ex6 = function()
+    df = MVDA.dataset("HAR")
+    data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end]))
+    (data, "HAR", 5, 7352 / 10299, false)
+end
+
+examples = (ex1, ex2, ex3, ex4, ex5, ex6)
+
+for f in examples
+    data, example, nfolds, split, shuffle = f()
+    run("/home/alanderos/Desktop/VDA/", example, data, false;
+        at=split,           # CV set / Test set split
+        nfolds=nfolds,      # number of folds
+        nreplicates=50,     # number of CV replicates
+    )
+end

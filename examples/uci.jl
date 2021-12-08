@@ -6,14 +6,14 @@ BLAS.set_num_threads(8)
 add_model_size_guide = function(fig, N)
     # Compute ticks based on maximum model size N.
     if N > 16
-        xticks = collect(N .* range(0, 1, length=11))
+        xticks = collect(round.(Int, N .* range(0, 1, length=11)))
     else
         xticks = collect(0:N)
     end
     sort!(xticks, rev=true)
 
     # Register figure inside main subplot and append extra x-axis.
-    model_size_guide = plot(yticks=nothing, xticks=xticks, xlim=(0,N), xlabel="Model Size", xflip=true)
+    model_size_guide = plot(yticks=nothing, xticks=xticks, xlim=(0,N), xlabel="# Features", xflip=true)
     full_figure = plot(fig, model_size_guide, layout=@layout [a{1.0h}; b{1e-8h}])
 
     return full_figure

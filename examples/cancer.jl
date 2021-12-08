@@ -13,7 +13,7 @@ add_model_size_guide = function(fig, N)
     sort!(xticks, rev=true)
 
     # Register figure inside main subplot and append extra x-axis.
-    model_size_guide = plot(yticks=nothing, xticks=xticks, xlim=(0,N), xlabel="Model Size", xflip=true)
+    model_size_guide = plot(yticks=nothing, xticks=xticks, xlim=(0,N), xlabel="# Features", xflip=true)
     full_figure = plot(fig, model_size_guide, layout=@layout [a{1.0h}; b{1e-8h}])
 
     return full_figure
