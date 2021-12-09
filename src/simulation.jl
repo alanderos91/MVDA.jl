@@ -6,7 +6,7 @@ function simulate_nested_circles(n::Int, c::Int=2; p::Real=8//10, rng::AbstractR
     # for each sample...
     for i in axes(X, 1)
         # generate a point (x, y) via polar coordinates
-        r = rand(rng) * sqrt(c)
+        r = sqrt(c * rand(rng))
         θ = 2*π * rand(rng)
         x = r * cos(θ)
         y = r * sin(θ)
@@ -15,12 +15,12 @@ function simulate_nested_circles(n::Int, c::Int=2; p::Real=8//10, rng::AbstractR
         X[i, 2] = y
 
         # assign a class via an intermediate point and the Bayes error, p
-        class_bayes = ceil(Int, sqrt(x^2 + y^2))
+        class_bayes = ceil(Int, x^2 + y^2)
+
         if rand(rng) ≤ p # accept proposed class
             class[i] = class_bayes
-        else # assign a random class uniformly over all possible classes
-            u = ceil(Int, rand(rng) * (c-1))
-            class[i] = ifelse(u < class_bayes, u, u+1)
+        else # assign a random class uniformly over all remaining classes
+            class[i] = rand(rng, setdiff(1:c, class_bayes))
         end
     end
 
