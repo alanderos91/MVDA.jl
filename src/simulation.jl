@@ -36,30 +36,26 @@ function simulate_waveform(n::Int, p::Int; m::Int=6, r::Int=4, s::Int=11, rng::A
     for i in axes(X, 1)
         u₁ = rand(rng)
         u₂ = rand(rng)
-
+        h₁(t) = max(m - abs(t-s), 0)
+        h₂(t) = h₁(t-r)
+        h₃(t) = h₁(t+r)
         if u₁ ≤ 1//3
             class[i] = 1
             for j in axes(X, 2)
                 ϵ = randn(rng)
-                A = max(m-abs(j-s), 0)
-                B = max(m-abs(j-r-s), 0)
-                X[i,j] = u₂*A + (1-u₂)*B + ϵ
+                X[i,j] = u₂*h₁(j) + (1-u₂)*h₂(j) + ϵ
             end
         elseif 1//3 < u₁ ≤ 2//3
             class[i] = 2
             for j in axes(X, 2)
                 ϵ = randn(rng)
-                A = max(m-abs(j-s), 0)
-                B = max(m-abs(j+r-s), 0)
-                X[i,j] = u₂*A + (1-u₂)*B + ϵ
+                X[i,j] = u₂*h₁(j) + (1-u₂)*h₃(j) + ϵ
             end
         else
             class[i] = 3
             for j in axes(X, 2)
                 ϵ = randn(rng)
-                A = max(m-abs(j-r-s), 0)
-                B = max(m-abs(j+r-s), 0)
-                X[i,j] = u₂*A + (1-u₂)*B + ϵ
+                X[i,j] = u₂*h₂(j) + (1-u₂)*h₃(j) + ϵ
             end
         end
     end
