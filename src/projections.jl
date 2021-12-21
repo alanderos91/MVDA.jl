@@ -24,6 +24,7 @@ function project_l0_ball!(x, idx, k, buffer)
     p = abs(pivot)
     nonzero_count = 0
     for i in eachindex(x)
+        if x[i] == 0 continue end
         if abs(x[i]) < p
             x[i] = 0
         else
@@ -81,10 +82,12 @@ function project_l0_ball!(X::AbstractMatrix, idx, scores, k, buffer; by::Union{V
     # preserve the top k elements
     p = abs(pivot)
     nonzero_count = 0
-    for i in eachindex(scores)
+    for (i, xᵢ) in enumerate(itr2)
+        if scores[i] == 0 continue end
+
         # row is not in the top k
         if scores[i] < p
-            fill!(view(X, i, :), 0)
+            fill!(xᵢ, 0)
             scores[i] = 0
         else # row is in the top k
             nonzero_count += 1
