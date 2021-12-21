@@ -1,6 +1,7 @@
 using CSV, DataFrames, MLDataUtils, KernelFunctions, MVDA, Plots, StableRNGs
 using LinearAlgebra, Statistics
 
+using MKL
 BLAS.set_num_threads(8)
 
 add_model_size_guide = function(fig, N)
@@ -88,11 +89,21 @@ run = function(dir, example, data, sparse2dense::Bool=false; at::Real=0.8, nfold
     return nothing
 end
 
+# Waveform example
+waveform_data = begin
+    n_cv, n_test = 375, 10^3
+    nsamples = n_cv + n_test
+    nfeatures = 21
+    Y, X = MVDA.simulate_waveform(nsamples, nfeatures; rng=StableRNG(1903))
+    DataFrame([Y X], :auto)
+end
+
 examples = (
     ("iris", 3, 120 / 150, true),
     ("lymphography", 3, 105 / 148, false),
     ("zoo", 3, 0.9, false),
     ("breast-cancer-wisconsin", 5, 0.8, false),
+    ("waveform", 5, 375 / 1375, false),
     ("splice", 5, 0.8, false),
     ("letter-recognition", 5, 0.8, false),
     ("optdigits", 5, 3823 / 5620, false),     # use cv / test split in original dataset: 3823 + 1797
@@ -100,7 +111,7 @@ examples = (
 )
 
 for (example, nfolds, split, shuffle) in examples
-    tmp = MVDA.dataset(example)
+    tmp = example != "waveform" ? MVDA.dataset(example) : waveform_data
     df = shuffle ? shuffleobs(tmp) : tmp[:,:]
     data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end]))
     run("/home/alanderos/Desktop/VDA/", example, data, false;

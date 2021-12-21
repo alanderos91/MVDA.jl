@@ -1,6 +1,7 @@
 using CSV, DataFrames, MLDataUtils, KernelFunctions, MVDA, Plots, StableRNGs
 using LinearAlgebra, Statistics
 
+using MKL
 BLAS.set_num_threads(8)
 
 add_model_size_guide = function(fig, N)

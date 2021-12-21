@@ -1,6 +1,7 @@
 using CSV, DataFrames, MLDataUtils, KernelFunctions, MVDA, Plots, StableRNGs
 using LinearAlgebra, Statistics
 
+using MKL
 BLAS.set_num_threads(8)
 
 add_model_size_guide = function(fig, N)
@@ -145,7 +146,7 @@ ex6 = function()
     (data, "HAR", 5, 7352 / 10299, false)
 end
 
-examples = (ex1, ex2, ex3, ex4, ex5, ex6)
+examples = (ex1, ex2, ex3, ex4, ex5,)
 
 for f in examples
     data, example, nfolds, split, shuffle = f()
