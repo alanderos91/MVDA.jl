@@ -91,10 +91,11 @@ function __evaluate_objective__(problem, ϵ, ρ, extras)
     __evaluate_residuals__(problem, ϵ, extras, true, true, false)
     __evaluate_gradient__(problem, ρ, extras)
 
-    loss = norm(res.weighted.all)^2 # 1/n * ∑ᵢ (Zᵢ - Bᵀxᵢ)²
-    dist = norm(res.dist.all)^2     # ∑ⱼ (P(B)ⱼ - Bⱼ)²
+    R, D, G = res.weighted.all, res.dist.all, grad.all
+    loss = dot(R, R) # 1/n * ∑ᵢ (Zᵢ - Bᵀxᵢ)²
+    dist = dot(D, D) # ∑ⱼ (P(B)ⱼ - Bⱼ)²
     obj = 1//2 * (loss + ρ * dist)
-    gradsq = norm(grad.all)^2
+    gradsq = dot(G, G)
 
     return IterationResult(loss, obj, dist, gradsq)
 end

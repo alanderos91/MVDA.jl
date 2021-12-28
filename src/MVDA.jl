@@ -195,7 +195,7 @@ function fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real,
     init_result = __evaluate_objective__(problem, ϵ, ρ, extras)
     result = SubproblemResult(0, init_result)
     cb(0, problem, ϵ, ρ, k, result)
-    old = result.distance
+    old = sqrt(result.distance)
 
     for iter in 1:nouter
         # Solve minimization problem for fixed rho.
@@ -208,7 +208,7 @@ function fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real,
         cb(iter, problem, ϵ, ρ, k, result)
 
         # Check for convergence to constrained solution.
-        dist = result.distance
+        dist = sqrt(result.distance)
         if dist < dtol || abs(dist - old) < rtol * (1 + old)
             break
         else
@@ -227,8 +227,8 @@ function fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real,
         print("\n\niters = ", iters)
         print("\n∑ᵢ max{0, |yᵢ-Bᵀxᵢ|₂-ϵ}² = ", loss)
         print("\nobjective     = ", obj)
-        print("\ndistance      = ", dist)
-        println("\n|gradient|² = ", gradsq)
+        print("\ndistance      = ", sqrt(dist))
+        println("\n|gradient|² = ", sqrt(gradsq))
     end
 
     return SubproblemResult(iters, loss, obj, dist, gradsq)
@@ -297,15 +297,16 @@ function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::R
     cb(0, problem, ϵ, ρ, k, result)
     old = result.objective
 
-    if result.gradient < gtol
+    if sqrt(result.gradient) < gtol
         return SubproblemResult(0, result)
     end
 
+    # Use previous estimates in case of warm start.
+    copyto!(coeff.all, coeff_prev.all)
+
     # Initialize iteration counts.
-    copyto!(coeff_prev.all, coeff.all)
     iters = 0
     nesterov_iter = 1
-
     verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|²")
     for iter in 1:ninner
         iters += 1
@@ -320,12 +321,12 @@ function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::R
         cb(iter, problem, ϵ, ρ, k, result)
 
         if verbose
-            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, result.distance, result.gradient)
+            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.distance), sqrt(result.gradient))
         end
 
         # Assess convergence.
         obj = result.objective
-        gradsq = result.gradient
+        gradsq = sqrt(result.gradient)
         if gradsq < gtol
             break
         elseif iter < ninner
@@ -334,6 +335,8 @@ function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::R
             old = obj
         end
     end
+    # Save parameter estimates in case of warm start.
+    copyto!(coeff_prev.all, coeff.all)
 
     return SubproblemResult(iters, result)
 end
@@ -428,7 +431,9 @@ function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, d
         for (j, ϵ) in enumerate(ϵ_grid)
             # Set initial model parameters.
             for idx in eachindex(train_problem.coeff.all)
-                train_problem.coeff.all[idx] = problem.coeff.all[idx]
+                coeff = problem.coeff.all[idx]
+                train_problem.coeff.all[idx] = coeff
+                train_problem.coeff_prev.all[idx] = coeff
             end
             
             for (i, s) in enumerate(s_grid)
