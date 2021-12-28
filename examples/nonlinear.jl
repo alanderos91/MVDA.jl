@@ -1,7 +1,7 @@
 using CSV, DataFrames, MLDataUtils, KernelFunctions, MVDA, Plots, StableRNGs
 using LinearAlgebra, Statistics
 
-using MKL
+# using MKL
 BLAS.set_num_threads(8)
 
 add_model_size_guide = function(fig, N)
@@ -38,6 +38,7 @@ run = function(dir, example, data, sparse2dense::Bool=false; at::Real=0.8, nfold
     n_validate = round(Int, n * at * 1/nfolds)
     n_test = round(Int, n * (1-at))
     fill!(problem.coeff.all, 1/(n_train+1))
+    fill!(problem.coeff_prev.all, 1/(n_train+1))
     ϵ_grid = [MVDA.maximal_deadzone(problem)]
     s_grid = sort!([1-k/n_train for k in n_train:-1:0], rev=sparse2dense)
     grids = (ϵ_grid, s_grid)
@@ -55,8 +56,8 @@ run = function(dir, example, data, sparse2dense::Bool=false; at::Real=0.8, nfold
         rng=rng,                # random number generator for reproducibility
         nouter=10^2,            # outer iterations
         ninner=10^6,            # inner iterations
-        gtol=1e-6,              # tolerance on gradient for convergence of inner problem
-        dtol=1e-6,              # tolerance on distance for convergence of outer problem
+        gtol=1e-3,              # tolerance on gradient for convergence of inner problem
+        dtol=1e-3,              # tolerance on distance for convergence of outer problem
         rtol=0.0,               # use strict distance criteria
         nesterov_threshold=100, # delay on Nesterov acceleration
         show_progress=true,     # display progress over replicates
