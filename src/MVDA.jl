@@ -226,9 +226,9 @@ function fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real,
     if verbose
         print("\n\niters = ", iters)
         print("\n∑ᵢ max{0, |yᵢ-Bᵀxᵢ|₂-ϵ}² = ", loss)
-        print("\nobjective     = ", obj)
-        print("\ndistance      = ", sqrt(dist))
-        println("\n|gradient|² = ", sqrt(gradsq))
+        print("\nobjective  = ", obj)
+        print("\ndistance   = ", sqrt(dist))
+        println("\n|gradient| = ", sqrt(gradsq))
     end
 
     return SubproblemResult(iters, loss, obj, dist, gradsq)
@@ -307,7 +307,7 @@ function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::R
     # Initialize iteration counts.
     iters = 0
     nesterov_iter = 1
-    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|²")
+    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|")
     for iter in 1:ninner
         iters += 1
 
