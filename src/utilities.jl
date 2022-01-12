@@ -22,7 +22,7 @@ function __evaluate_residuals__(problem, ϵ, extras, need_main::Bool, need_dist:
         axpby!(a, Y, -a, res.main.all)
 
         # weighted residuals, W^1/2 * (Y - X*B)
-        for i in axes(Y, 1)
+        @inbounds for i in axes(Y, 1)
             yᵢ = view(Y, i, :)
             rᵢ = res.main.sample[i]
             wrᵢ = res.weighted.sample[i]
@@ -55,13 +55,10 @@ function __evaluate_gradient__(problem, ρ, extras)
     n, _, _ = probdims(problem)
     X = get_design_matrix(problem)
 
-    for j in eachindex(grad.dim)
-        # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ bⱼI] * Rₘ,ⱼ
-        a = 1 / sqrt(n)
-        b = ρ
-        mul!(grad.dim[j], X', res.weighted.dim[j])
-        axpby!(-b, res.dist.dim[j], -a, grad.dim[j])
-    end
+    # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ bⱼI] * Rₘ
+    a, b = 1/sqrt(n), ρ
+    mul!(grad.all, X', res.weighted.all)
+    axpby!(-b, res.dist.all, -a, grad.all)
 
     return nothing
 end
@@ -123,7 +120,7 @@ function __apply_nesterov__!(x, y, iter::Integer, needs_reset::Bool, r::Int=3)
         iter = 1
     else # Nesterov acceleration 
         γ = (iter - 1) / (iter + r - 1)
-        for i in eachindex(x)
+        @inbounds for i in eachindex(x)
             xi, yi = x[i], y[i]
             zi = xi + γ * (xi - yi)
             x[i], y[i] = zi, xi

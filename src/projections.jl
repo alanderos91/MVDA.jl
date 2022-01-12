@@ -23,7 +23,7 @@ function project_l0_ball!(x, idx, k, buffer)
     # preserve the top k elements
     p = abs(pivot)
     nonzero_count = 0
-    for i in eachindex(x)
+    @inbounds for i in eachindex(x)
         if x[i] == 0 continue end
         if abs(x[i]) < p
             x[i] = 0
@@ -38,7 +38,7 @@ function project_l0_ball!(x, idx, k, buffer)
         _buffer_ = view(buffer, 1:number_to_drop)
         _indexes_ = findall(!iszero, x)
         sample!(_indexes_, _buffer_, replace=false)
-        for i in _buffer_
+        @inbounds for i in _buffer_
             x[i] = 0
         end
     end
@@ -82,7 +82,7 @@ function project_l0_ball!(X::AbstractMatrix, idx, scores, k, buffer; by::Union{V
     # preserve the top k elements
     p = abs(pivot)
     nonzero_count = 0
-    for (i, xᵢ) in enumerate(itr2)
+    @inbounds for (i, xᵢ) in enumerate(itr2)
         if scores[i] == 0 continue end
 
         # row is not in the top k
@@ -100,7 +100,7 @@ function project_l0_ball!(X::AbstractMatrix, idx, scores, k, buffer; by::Union{V
         _buffer_ = view(buffer, 1:number_to_drop)
         _indexes_ = findall(!iszero, scores)
         sample!(_indexes_, _buffer_, replace=false)
-        for i in _buffer_
+        @inbounds for i in _buffer_
             if by isa Val{:row}
                 fill!(view(X, i, :), 0)
             elseif by isa Val{:col}

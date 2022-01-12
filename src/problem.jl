@@ -325,9 +325,9 @@ function __predict__(::Kernel, problem::MVDAProblem, x::AbstractVector)
     ϕ = zeros(c-1)
     for j in eachindex(ϕ)
         for (i, xᵢ) in enumerate(eachrow(problem.X))
-            ϕ[j] += Γ[i,j] * κ(xᵢ, x)
+            @inbounds ϕ[j] += Γ[i,j] * κ(xᵢ, x)
         end
-        ϕ[j] += ifelse(problem.intercept, Γ[end,j], zero(ϕ[j]))
+        @inbounds ϕ[j] += ifelse(problem.intercept, Γ[end,j], zero(ϕ[j]))
     end
     return ϕ
 end
