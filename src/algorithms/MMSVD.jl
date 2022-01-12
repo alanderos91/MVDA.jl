@@ -17,10 +17,10 @@ function __mm_init__(::MMSVD, problem::MVDAProblem, ::Nothing)
 
     # worker arrays
     Z = Matrix{T}(undef, n, c-1)
-    buffer = Vector{T}(undef, r)
+    buffer = Matrix{T}(undef, r, c-1)
     
     # diagonal matrices
-    Ψ = [Diagonal(Vector{T}(undef, r)) for _ in 1:c-1]
+    Ψ = Diagonal(Vector{T}(undef, r))
     
     return (;
         projection=StructuredL0Projection(nparams),
@@ -46,16 +46,12 @@ __mm_update_sparsity__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras) = nothi
 function __mm_update_rho__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras)
     @unpack s, Ψ = extras
     n, _, _ = probdims(problem)
-    a² = 1 / n
+    a², b² = 1/n, ρ
 
-    # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
-    for j in eachindex(Ψ)
-        Ψⱼ = Ψ[j]
-        b² = ρ
-        for i in eachindex(Ψⱼ.diag)
-            sᵢ² = s[i]^2
-            Ψⱼ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
-        end
+    # Update the diagonal matrices Ψ = (a² Σ²) / (a² Σ² + b² I).
+    for i in eachindex(Ψ.diag)
+        sᵢ² = s[i]^2
+        Ψ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
     end
 
     return nothing
@@ -92,23 +88,15 @@ function __mm_iterate__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras)
     apply_projection(projection, problem, k)
     __evaluate_residuals__(problem, ϵ, extras, true, false, true)
 
-    for j in eachindex(coeff.dim)
-        # Rename relevant arrays/views
-        βⱼ = coeff.dim[j]
-        pⱼ = proj.dim[j]
-        zⱼ = view(Z, :, j)
-        Ψⱼ = Ψ[j]
-
-        # Update parameters along dimension j:
-        # βⱼ = pⱼ + V' * Ψⱼ * (Σ⁻¹Uᵀzⱼ - Vᵀpⱼ) 
-        mul!(buffer, U', zⱼ)
-        ldiv!(Σ, buffer)
-        mul!(buffer, V', pⱼ, -one(T), one(T))
-        lmul!(Ψⱼ, buffer)
-        mul!(βⱼ, V, buffer)
-        axpy!(one(T), pⱼ, βⱼ)
-        # @assert βⱼ ≈ pⱼ + V * Ψⱼ * (inv(Σ)*U'*zⱼ - V'*pⱼ)
-    end
+    # Update parameters:B = P + V * Ψ * (Σ⁻¹UᵀZ - VᵀP) 
+    B = coeff.all
+    P = proj.all
+    mul!(buffer, U', Z)
+    ldiv!(Σ, buffer)
+    mul!(buffer, V', P, -one(T), one(T))
+    lmul!(Ψ, buffer)
+    mul!(B, V, buffer)
+    axpy!(one(T), P, B)
 
     return nothing
 end

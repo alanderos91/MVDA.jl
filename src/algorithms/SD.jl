@@ -43,6 +43,7 @@ function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
     X = get_design_matrix(problem)
     n, _, _ = probdims(problem)
     T = floattype(problem)
+    a², b² = 1/n, ρ
 
     # Project and then evaluate gradient.
     apply_projection(projection, problem, k)
@@ -50,24 +51,14 @@ function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
     __evaluate_gradient__(problem, ρ, extras)
 
     # Find optimal step size
-    C1 = zero(T)
-    C2 = zero(T)
-    a² = 1/n
-    b² = ρ
-    for j in eachindex(grad.dim)
-        gⱼ = grad.dim[j]
-        Xgⱼ = res.main.dim[j]
-        mul!(Xgⱼ, X, gⱼ)
-        normgⱼ² = dot(gⱼ, gⱼ)
-        normXgⱼ² = dot(Xgⱼ, Xgⱼ)
-
-        C1 += normgⱼ²
-        C2 += normXgⱼ²
-    end
-    t = C1 / (a²*C2 + b²*C1)
+    B, G, XG = coeff.all, grad.all, res.main.all
+    mul!(XG, X, G)
+    C1 = dot(G, G)
+    C2 = dot(XG, XG)
+    t = C1 / (a²*C2 + b²*C1 + eps())
 
     # Move in the direction of steepest descent.
-    axpy!(-t, grad.all, coeff.all)
+    axpy!(-t, G, B)
 
     return nothing
 end
