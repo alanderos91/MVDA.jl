@@ -195,19 +195,25 @@ function prediction_error(model::MVDAProblem, train_set, validation_set, test_se
     V_Y, V_X = validation_set
     T_Y, T_X = test_set
 
-    Tr_label = map(yᵢ -> model.vertex2label[yᵢ], eachrow(Tr_Y))
-    V_label = map(yᵢ -> model.vertex2label[yᵢ], eachrow(V_Y))
-    T_label = map(yᵢ -> model.vertex2label[yᵢ], eachrow(T_Y))
-
-    # Make predictions on each subset.
-    Tr_call = classify(model, view(Tr_X, :, 1:p))
-    V_call = classify(model, view(V_X, :, 1:p))
-    T_call = classify(model, view(T_X, :, 1:p))
-
-    # Evaluate errors on each subset.
-    Tr = 100 * (1 - sum(Tr_call .== Tr_label) / length(Tr_label))
-    V = 100 * (1 - sum(V_call .== V_label) / length(V_label))
-    T = 100 * (1 - sum(T_call .== T_label) / length(T_label))
+    # Helper function to make predictions on each subset and evaluate errors.
+    _error = function(model, Y, X)
+        n = size(X, 1)
+        acc = Threads.Atomic{Int}(0)
+        @batch per=core for i in 1:n
+            yᵢ, xᵢ = view(Y, i, :), view(X, i, :)
+            true_label = model.vertex2label[yᵢ]
+            call = classify(model, xᵢ)
+            Threads.atomic_add!(acc, Int(call == true_label))
+        end
+        ncorrect = acc[]
+        return 100 * (1 - ncorrect/n)
+    end
+    nthreads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    Tr = _error(model, Tr_Y, view(Tr_X, :, 1:p))
+    V = _error(model, V_Y, view(V_X, :, 1:p))
+    T = _error(model, T_Y, view(T_X, :, 1:p))
+    BLAS.set_num_threads(nthreads)
 
     return (Tr, V, T)
 end

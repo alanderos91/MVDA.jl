@@ -6,6 +6,7 @@ using Parameters, Printf, MLDataUtils, ProgressMeter
 using LinearAlgebra, Random, Statistics, StatsBase, StableRNGs
 using KernelFunctions
 using DelimitedFiles, Plots
+using Polyester, MLDataUtils
 
 import Base: show, iterate
 

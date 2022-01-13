@@ -307,7 +307,17 @@ Predict the vertex values of samples/instances in `X`, assumed to be aligned alo
 
 See also: [`predict(problem::MVDAProblem, x::AbstractVector)`](@ref), [`classify`](@ref)
 """
-predict(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> predict(problem, xᵢ), eachrow(X))
+function predict(problem::MVDAProblem, X::AbstractMatrix)
+    n = size(X, 1)
+    Y = Vector{floattype(problem)}(undef, n)
+    nthreads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    @batch per=core for i in 1:n
+        Y[i] = predict(problem, view(X, i, :))
+    end
+    BLAS.set_num_threads(nthreads)
+    return Y
+end
 
 function __predict__(::Nothing, problem::MVDAProblem, x::AbstractVector)
     @unpack p, proj, intercept = problem
@@ -319,16 +329,28 @@ function __predict__(::Nothing, problem::MVDAProblem, x::AbstractVector)
 end
 
 function __predict__(::Kernel, problem::MVDAProblem, x::AbstractVector)
+    n = problem.n
     c = problem.c
     κ = problem.kernel
     Γ = problem.proj.all
-    ϕ = zeros(c-1)
-    for j in eachindex(ϕ)
-        for (i, xᵢ) in enumerate(eachrow(problem.X))
-            @inbounds ϕ[j] += Γ[i,j] * κ(xᵢ, x)
+    X = problem.X
+
+    ϕ = zeros(floattype(problem), c-1)
+    for (i, xᵢ) in enumerate(eachrow(X))
+        k = κ(xᵢ, x)
+        γ = view(Γ, i, :)
+        @inbounds for j in eachindex(ϕ)
+            ϕ[j] = muladd(k, γ[j], ϕ[j])
         end
-        @inbounds ϕ[j] += ifelse(problem.intercept, Γ[end,j], zero(ϕ[j]))
     end
+
+    # ...and accumulate intercept term, ϕⱼ += Γ₀ⱼ.
+    if problem.intercept
+        @inbounds for j in eachindex(ϕ)
+            ϕ[j] += Γ[end,j]
+        end
+    end
+
     return ϕ
 end
 
@@ -340,7 +362,17 @@ Classify the samples/instances in `X` based on the model in `problem`.
 Each sample is assumed to be aligned along rows (e.g. `X[i,:]` is sample `i`).
 See also: [`classify(problem::MVDAProblem, x::AbstractVector)`](@ref), [`predict`](@ref)
 """
-classify(problem::MVDAProblem, X::AbstractMatrix) = map(xᵢ -> classify(problem, xᵢ), eachrow(X))
+function classify(problem::MVDAProblem, X::AbstractMatrix)
+    n = size(X, 1)
+    L = Vector{valtype(problem.vertex2label)}(undef, n)
+    nthreads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    @batch per=core for i in 1:n
+        L[i] = classify(problem, view(X, i, :))
+    end
+    BLAS.set_num_threads(nthreads)
+    return L
+end
 
 """
     classify(problem::MVDAProblem, x::AbstractVector)
