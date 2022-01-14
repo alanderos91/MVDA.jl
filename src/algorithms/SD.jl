@@ -7,8 +7,7 @@ struct SD <: AbstractMMAlg end
 function __mm_init__(::SD, problem, ::Nothing)
     @unpack X, coeff = problem
     n, p, _ = probdims(problem)
-    T = floattype(problem)
-    nparams = ifelse(problem isa MVDAProblem, p, n)
+    nparams = ifelse(problem.kernel isa Nothing, p, n)
 
     # residuals subroutine requires an object named Z; need to fix
     Z = nothing
