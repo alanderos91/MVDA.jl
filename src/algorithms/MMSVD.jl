@@ -43,10 +43,15 @@ end
 __mm_update_sparsity__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras) = nothing
 
 # Update data structures due to changing ρ.
-function __mm_update_rho__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras)
+__mm_update_rho__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras) = update_diagonal(problem, ρ, extras)
+
+# Update data structures due to changing λ. 
+__mm_update_lambda__(::MMSVD, problem::MVDAProblem, ϵ, λ, extras) = update_diagonal(problem, λ, extras)
+
+function update_diagonal(problem::MVDAProblem, λ, extras)
     @unpack s, Ψ = extras
     n, _, _ = probdims(problem)
-    a², b² = 1/n, ρ
+    a², b² = 1/n, λ
 
     # Update the diagonal matrices Ψ = (a² Σ²) / (a² Σ² + b² I).
     for i in eachindex(Ψ.diag)
@@ -56,25 +61,6 @@ function __mm_update_rho__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras)
 
     return nothing
 end
-
-# # Update data structures due to changing λ.
-# function __mm_update_lambda__(::MMSVD, problem::MVDAProblem, ϵ, λ, extras)
-#     @unpack s, Ψ = extras
-#     n, _, _ = probdims(problem)
-#     a² = 1 / n
-
-#     # Update the diagonal matrices Ψⱼ = (a² Σ²) / (a² Σ² + b² I).
-#     for j in eachindex(Ψ)
-#         Ψⱼ = Ψ[j]
-#         b² = λ
-#         for i in eachindex(Ψⱼ.diag)
-#             sᵢ² = s[i]^2
-#             Ψⱼ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
-#         end
-#     end
-
-#     return nothing
-# end
 
 # Apply one update.
 function __mm_iterate__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras)
@@ -101,29 +87,22 @@ function __mm_iterate__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras)
     return nothing
 end
 
-# # Apply one update in regularized version.
-# function __mm_iterate__(::MMSVD, problem::MVDAProblem, ϵ, λ, extras)
-#     @unpack intercept, coeff, proj = problem
-#     @unpack buffer = extras
-#     @unpack Z, Ψ, U, s, V = extras
-#     Σ = Diagonal(s)
+# Apply one update in reguarlized problem.
+function __reg_iterate__(::MMSVD, problem::MVDAProblem, ϵ, λ, extras)
+    @unpack intercept, coeff = problem
+    @unpack buffer = extras
+    @unpack Z, Ψ, U, s, V = extras
+    Σ = Diagonal(s)
 
-#     # need to compute Z via residuals...
-#     __evaluate_residuals__(problem, ϵ, extras, true, false, true)
+    # need to compute Z via residuals...
+    __evaluate_residuals__(problem, ϵ, extras, true, false, true)
 
-#     for j in eachindex(coeff.dim)
-#         # Rename relevant arrays/views
-#         βⱼ = coeff.dim[j]
-#         zⱼ = view(Z, :, j)
-#         Ψⱼ = Ψ[j]
+    # Update parameters: B = V * Ψ * Σ⁻¹ * Uᵀ * Z
+    B = coeff.all
+    mul!(buffer, U', Z)
+    ldiv!(Σ, buffer)
+    lmul!(Ψ, buffer)
+    mul!(B, V, buffer)
 
-#         # Update parameters along dimension j:
-#         # βⱼ = V' * Ψⱼ * Σ⁻¹Uᵀzⱼ)
-#         mul!(buffer, U', zⱼ)
-#         ldiv!(Σ, buffer)
-#         lmul!(Ψⱼ, buffer)
-#         mul!(βⱼ, V, buffer)
-#     end
-
-#     return nothing
-# end
+    return nothing
+end

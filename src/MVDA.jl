@@ -500,77 +500,76 @@ function cv_estimation(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tu
     return replicate
 end
 
-# function fit_regMVDA(algorithm, problem, ϵ::Real, λ::Real; kwargs...)
-#     # Initialize any additional data structures.
-#     extras = __mm_init__(algorithm, problem, nothing)
+"""
+```init!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
 
-#     fit_regMVDA!(algorithm, problem, ϵ, λ, extras, true; kwargs...)
-# end
+Initialize a `problem` with its `λ`-regularized solution.
+"""
+function init!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ, λ, _extras_=nothing;
+    maxiter::Int=10^3,
+    gtol::Real=1e-6,
+    nesterov_threshold::Int=10,
+    verbose::Bool=false,
+    )
+    # Check for missing data structures.
+    extras = __mm_init__(algorithm, problem, _extras_)
 
-# function fit_regMVDA!(algorithm, problem, ϵ, λ, extras=nothing, update_extras::Bool=true;
-#     ninner::Int=10^4,
-#     gtol::Real=1e-6,
-#     nesterov_threshold::Int=10,
-#     verbose::Bool=false,
-#     cb::Function=DEFAULT_CALLBACK,
-#     kwargs...
-#     )
-#     # Check for missing data structures.
-#     if extras isa Nothing
-#         error("Detected missing data structures for algorithm $(algorithm).")
-#     end
+    # Get problem info and extra data structures.
+    @unpack coeff, coeff_prev = problem
 
-#     # Get problem info and extra data structures.
-#     @unpack intercept, coeff, coeff_prev, proj = problem
+    # Update data structures due to hyperparameters.
+    __mm_update_lambda__(algorithm, problem, ϵ, λ, extras)
 
-#     update_extras && __mm_update_lambda__(algorithm, problem, ϵ, λ, extras)
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    result = __evaluate_reg_objective__(problem, ϵ, λ, extras)
+    old = result.objective
 
-#     # Check initial values for loss, objective, distance, and norm of gradient.
-#     copyto!(proj.all, coeff.all)
-#     result = __evaluate_objective_reg__(problem, ϵ, λ, extras)
-#     # cb(0, problem, ϵ, 0.0, k, result)
-#     old = result.objective
+    if sqrt(result.gradient) < gtol
+        return SubproblemResult(0, result)
+    end
 
-#     if result.gradient < gtol
-#         return SubproblemResult(0, result)
-#     end
+    # Initialize coefficients.
+    unsafe_start(B) = any(Bᵢⱼ -> isnan(Bᵢⱼ) || isinf(Bᵢⱼ), B)
+    if unsafe_start(coeff.all) || unsafe_start(coeff_prev.all)
+        fill!(coeff.all, 1)
+        fill!(coeff_prev.all, 1)
+    else 
+        copyto!(coeff.all, coeff_prev.all)
+    end
 
-#     # Initialize iteration counts.
-#     copyto!(coeff_prev.all, coeff.all)
-#     iters = 0
-#     nesterov_iter = 1
+    # Initialize iteration counts.
+    iters = 0
+    nesterov_iter = 1
+    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "|gradient|")
+    for iter in 1:maxiter
+        iters += 1
 
-#     verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|²")
-#     for iter in 1:ninner
-#         iters += 1
+        # Apply the algorithm map to minimize the quadratic surrogate.
+        __reg_iterate__(algorithm, problem, ϵ, λ, extras)
 
-#         # Apply the algorithm map to minimize the quadratic surrogate.
-#         __mm_iterate__(algorithm, problem, ϵ, λ, extras)
+        # Update loss, objective, and gradient.
+        result = __evaluate_reg_objective__(problem, ϵ, λ, extras)
 
-#         # Update loss, objective, distance, and gradient.
-#         copyto!(proj.all, coeff.all)
-#         result = __evaluate_objective_reg__(problem, ϵ, λ, extras)
+        if verbose
+            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.gradient))
+        end
 
-#         # cb(iter, problem, ϵ, 0.0, k, result)
+        # Assess convergence.
+        obj = result.objective
+        gradsq = sqrt(result.gradient)
+        if gradsq < gtol
+            break
+        elseif iter < maxiter
+            needs_reset = iter < nesterov_threshold || obj > old
+            nesterov_iter = __apply_nesterov__!(coeff.all, coeff_prev.all, nesterov_iter, needs_reset)
+            old = obj
+        end
+    end
+    # Save parameter estimates in case of warm start.
+    copyto!(coeff_prev.all, coeff.all)
 
-#         if verbose
-#             @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, result.distance, result.gradient)
-#         end
-
-#         # Assess convergence.
-#         obj = result.objective
-#         gradsq = result.gradient
-#         if gradsq < gtol
-#             break
-#         elseif iter < ninner
-#             needs_reset = iter < nesterov_threshold || obj > old
-#             nesterov_iter = __apply_nesterov__!(coeff.all, coeff_prev.all, nesterov_iter, needs_reset)
-#             old = obj
-#         end
-#     end
-
-#     return  SubproblemResult(iters, result)
-# end
+    return SubproblemResult(iters, result)
+end
 
 # function fit_MVDA(algorithm::CyclicVDA, problem, ϵ, δ, λ₁, λ₂;
 #         niter::Int=10^3,

@@ -63,20 +63,18 @@ function __evaluate_gradient__(problem, ρ, extras)
     return nothing
 end
 
-# function __evaluate_gradient_reg__(problem, λ, extras)
-#     @unpack res, grad = problem
-#     n, _, _ = probdims(problem)
-#     X = get_design_matrix(problem)
+function __evaluate_reg_gradient__(problem, λ, extras)
+    @unpack res, grad = problem
+    n, _, _ = probdims(problem)
+    X = get_design_matrix(problem)
 
-#     for j in eachindex(grad.dim)
-#         # ∇g_ρ(B ∣ Bₘ)ⱼ = -[aXᵀ λI] * Rₘ,ⱼ
-#         a = 1 / sqrt(n)
-#         mul!(grad.dim[j], X', res.weighted.dim[j])
-#         axpby!(λ, problem.coeff.dim[j], -a, grad.dim[j])
-#     end
+    # ∇q_λ(B ∣ Bₘ) = -aXᵀRₘ + λB
+    a, b = 1/sqrt(n), λ
+    mul!(grad.all, X', res.weighted.all)
+    axpby!(b, problem.coeff.all, -a, grad.all)
 
-#     return nothing
-# end
+    return nothing
+end
 
 """
 Evaluate the penalized least squares criterion. Also updates the gradient.
@@ -97,18 +95,19 @@ function __evaluate_objective__(problem, ϵ, ρ, extras)
     return IterationResult(loss, obj, dist, gradsq)
 end
 
-# function __evaluate_objective_reg__(problem, ϵ, λ, extras)
-#     @unpack res, grad = problem
+function __evaluate_reg_objective__(problem, ϵ, λ, extras)
+    @unpack coeff, res, grad = problem
 
-#     __evaluate_residuals__(problem, ϵ, extras, true, false, false)
-#     __evaluate_gradient_reg__(problem, λ, extras)
+    __evaluate_residuals__(problem, ϵ, extras, true, false, false)
+    __evaluate_reg_gradient__(problem, λ, extras)
 
-#     loss = norm(res.weighted.all)^2 # 1/n * ∑ᵢ (Zᵢ - Bᵀxᵢ)²
-#     objective = 1//2 * (loss + λ * norm(problem.coeff.all))
-#     gradsq = norm(grad.all)^2
+    R, B, G = res.weighted.all, coeff.all, grad.all
+    loss = dot(R, R) # 1/n * ∑ᵢ (Zᵢ - Bᵀxᵢ)²
+    objective = 1//2 * (loss + λ * dot(B, B))
+    gradsq = dot(G, G)
 
-#     return IterationResult(loss, objective, 0.0, gradsq)
-# end
+    return IterationResult(loss, objective, 0.0, gradsq)
+end
 
 """
 Apply acceleration to the current iterate `x` based on the previous iterate `y`
