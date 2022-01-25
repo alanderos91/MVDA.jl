@@ -411,3 +411,18 @@ function maximal_deadzone(problem::MVDAProblem)
     c = problem.c
     ifelse(c == 2, 0.5, 1//2 * sqrt(2*c/(c-1)))
 end
+
+function set_initial_coefficients!(::Nothing, train_coeff, coeff, idx)
+    copyto!(train_coeff, coeff)
+end
+
+function set_initial_coefficients!(::Kernel, train_coeff, coeff, idx)
+    @views for (i, idx_i) in enumerate(idx)
+        train_coeff[i, :] .= coeff[idx_i, :]
+    end
+end
+
+function set_initial_coefficients!(train_problem::MVDAProblem, problem::MVDAProblem, idx)
+    set_initial_coefficients!(train_problem.kernel, train_problem.coeff.all, problem.coeff.all, idx)
+    set_initial_coefficients!(train_problem.kernel, train_problem.coeff_prev.all, problem.coeff_prev.all, idx)
+end

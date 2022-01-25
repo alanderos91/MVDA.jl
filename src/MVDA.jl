@@ -377,6 +377,9 @@ Hyperparameters are specified in `grids = (ϵ_grid, s_grid)`, and data subsets a
 Additional arguments are propagated to `fit` and `anneal`. See also [`MVDA.fit`](@ref) and [`MVDA.anneal`](@ref).
 """
 function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, dataset_split::Tuple{Any,Any};
+    lambda::Real=1e-3,
+    maxiter::Int=10^4,
+    tol::Real=1e-4,
     nfolds::Int=5,
     scoref::Function=DEFAULT_SCORE_FUNCTION,
     cb::Function=DEFAULT_CALLBACK,
@@ -426,22 +429,25 @@ function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}, d
         foreach(X -> StatsBase.transform!(F, X), (train_X, val_X, test_X))
         
         # Create a problem object for the training set.
+        train_idx, _ = parentindices(train_set[1])
         train_problem = change_data(problem, train_Y, train_X)
         extras = __mm_init__(algorithm, train_problem, nothing)
 
         for (j, ϵ) in enumerate(ϵ_grid)
             # Set initial model parameters.
-            for idx in eachindex(train_problem.coeff.all)
-                coeff = problem.coeff.all[idx]
-                train_problem.coeff.all[idx] = coeff
-                train_problem.coeff_prev.all[idx] = coeff
-            end
+            set_initial_coefficients!(train_problem, problem, train_idx)
             
             for (i, s) in enumerate(s_grid)
                 # Obtain solution as function of (ϵ, s).
-                result.time[k][i,j] = @elapsed MVDA.fit!(algorithm, train_problem, ϵ, s, extras, (true, false,);
-                    cb=cb, kwargs...
-                )
+                if s != 0.0
+                    result.time[k][i,j] = @elapsed MVDA.fit!(algorithm, train_problem, ϵ, s, extras, (true, false,);
+                        cb=cb, kwargs...
+                    )
+                else# s == 0
+                    result.time[k][i,j] = @elapsed MVDA.init!(algorithm, train_problem, ϵ, lambda, extras;
+                        maxiter=maxiter, gtol=tol, nesterov_threshold=0,
+                    )
+                end
                 copyto!(train_problem.coeff.all, train_problem.proj.all)
 
                 # Evaluate the solution.
@@ -515,10 +521,14 @@ function init!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ, λ, _extras_=
     extras = __mm_init__(algorithm, problem, _extras_)
 
     # Get problem info and extra data structures.
-    @unpack coeff, coeff_prev = problem
+    @unpack coeff, coeff_prev, proj = problem
 
     # Update data structures due to hyperparameters.
     __mm_update_lambda__(algorithm, problem, ϵ, λ, extras)
+
+    # Initialize coefficients.
+    randn!(coeff.all)
+    copyto!(coeff_prev.all, coeff.all)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     result = __evaluate_reg_objective__(problem, ϵ, λ, extras)
@@ -526,15 +536,6 @@ function init!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ, λ, _extras_=
 
     if sqrt(result.gradient) < gtol
         return SubproblemResult(0, result)
-    end
-
-    # Initialize coefficients.
-    unsafe_start(B) = any(Bᵢⱼ -> isnan(Bᵢⱼ) || isinf(Bᵢⱼ), B)
-    if unsafe_start(coeff.all) || unsafe_start(coeff_prev.all)
-        fill!(coeff.all, 1)
-        fill!(coeff_prev.all, 1)
-    else 
-        copyto!(coeff.all, coeff_prev.all)
     end
 
     # Initialize iteration counts.
@@ -567,6 +568,7 @@ function init!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ, λ, _extras_=
     end
     # Save parameter estimates in case of warm start.
     copyto!(coeff_prev.all, coeff.all)
+    copyto!(proj.all, coeff.all)
 
     return SubproblemResult(iters, result)
 end
