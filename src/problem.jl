@@ -241,6 +241,7 @@ Create a new `MVDAProblem` instance from the labeled dataset `(label, data)` usi
 """
 function change_data(problem::MVDAProblem, labels::AbstractVector, data)
     @unpack label2vertex = problem          # extract encoding-dependent fields + problem info
+    T = floattype(problem)
     Y = create_Y(T, labels, label2vertex)   # create response matrix
     change_data(problem, Y, data)           # dispatch
 end
@@ -255,7 +256,8 @@ Assumes `Y` already contains vertex assignments consistent with the encoding in 
 function change_data(problem::MVDAProblem, Y::AbstractMatrix, data)
     # extract encoding-dependent fields + problem info
     @unpack vertex, label2vertex, vertex2label, intercept, kernel = problem
-    n, p, c = size(Y, 1), problem.p, problem.c
+    has_intercept = all(isequal(1), data[:,end])
+    n, p, c = size(Y, 1), has_intercept ? size(data, 2)-1 : size(data, 2), problem.c
     T = floattype(problem)
 
     # create new design matrices
