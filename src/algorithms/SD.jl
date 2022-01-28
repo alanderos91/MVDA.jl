@@ -19,7 +19,7 @@ end
 
 # Check for data structure allocations; otherwise initialize.
 function __mm_init__(::SD, problem, extras)
-    if projection in keys(extras) && :Z in keys(extras) # TODO
+    if :projection in keys(extras) && :Z in keys(extras) # TODO
         return extras
     else
         __mm_init__(SD(), problem, nothing)
