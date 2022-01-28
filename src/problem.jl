@@ -310,12 +310,13 @@ Predict the vertex values of samples/instances in `X`, assumed to be aligned alo
 See also: [`predict(problem::MVDAProblem, x::AbstractVector)`](@ref), [`classify`](@ref)
 """
 function predict(problem::MVDAProblem, X::AbstractMatrix)
+    @unpack c = problem
     n = size(X, 1)
-    Y = Vector{floattype(problem)}(undef, n)
+    Y = Matrix{floattype(problem)}(undef, n, c-1)
     nthreads = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
     @batch per=core for i in 1:n
-        Y[i] = predict(problem, view(X, i, :))
+        Y[i,:] .= predict(problem, view(X, i, :))
     end
     BLAS.set_num_threads(nthreads)
     return Y
@@ -369,8 +370,8 @@ function classify(problem::MVDAProblem, X::AbstractMatrix)
     L = Vector{valtype(problem.vertex2label)}(undef, n)
     nthreads = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
-    @batch per=core for i in 1:n
-        L[i] = classify(problem, view(X, i, :))
+    @batch per=core for i in eachindex(L)
+        L[i] = classify(problem, X[i,:])
     end
     BLAS.set_num_threads(nthreads)
     return L

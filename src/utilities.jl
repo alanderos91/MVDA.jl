@@ -199,7 +199,7 @@ function prediction_error(model::MVDAProblem, train_set, validation_set, test_se
         n = size(X, 1)
         acc = Threads.Atomic{Int}(0)
         @batch per=core for i in 1:n
-            yᵢ, xᵢ = view(Y, i, :), view(X, i, :)
+            yᵢ, xᵢ = Y[i,:], X[i,:]
             true_label = model.vertex2label[yᵢ]
             call = classify(model, xᵢ)
             Threads.atomic_add!(acc, Int(call == true_label))
