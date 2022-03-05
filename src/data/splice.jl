@@ -10,7 +10,7 @@ register(DataDep(
     See also: https://www.rdocumentation.org/packages/mlbench/versions/2.1-1/topics/DNA
 
     Observations: 3186
-    Features:     181
+    Features:     180
     Classes:      3
     """,
     "https://www.openml.org/data/get_csv/4965245/dna.arff",
