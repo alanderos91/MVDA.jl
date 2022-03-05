@@ -196,23 +196,26 @@ function prediction_error(model::MVDAProblem, train_set, validation_set, test_se
 
     # Helper function to make predictions on each subset and evaluate errors.
     _error = function(model, Y, X)
-        n = size(X, 1)
-        acc = Threads.Atomic{Int}(0)
-        @batch per=core for i in 1:n
-            yᵢ, xᵢ = Y[i,:], X[i,:]
+        # Sanity check: Y and X have the same number of rows.
+        size(Y, 1) != size(X, 1) && error("Vertex assignments Y $(size(Y)) not compatible with data X $(size(X)).")
+        # Predict response in vertex space; may use @batch.
+        Yhat = predict(model, X)
+
+        # Sweep through predictions and tally the mistakes.
+        nincorrect = 0
+        @views for i in axes(Yhat, 1)
+            @inbounds yᵢ, yhatᵢ = Y[i,:], Yhat[i,:]
             true_label = model.vertex2label[yᵢ]
-            call = classify(model, xᵢ)
-            Threads.atomic_add!(acc, Int(call == true_label))
+            predicted_label = __classify__(model, yhatᵢ)
+            nincorrect += predicted_label != true_label
         end
-        ncorrect = acc[]
-        return 100 * (1 - ncorrect/n)
+
+        return 100 * nincorrect / size(Y, 1)
     end
-    nthreads = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
+
     Tr = _error(model, Tr_Y, view(Tr_X, :, 1:p))
     V = _error(model, V_Y, view(V_X, :, 1:p))
     T = _error(model, T_Y, view(T_X, :, 1:p))
-    BLAS.set_num_threads(nthreads)
 
     return (Tr, V, T)
 end
@@ -251,16 +254,19 @@ Base.iterate(r::SubproblemResult, ::Val{:distance}) = (r.distance, Val(:gradient
 Base.iterate(r::SubproblemResult, ::Val{:gradient}) = (r.gradient, Val(:done))
 Base.iterate(r::SubproblemResult, ::Val{:done}) = nothing
 
-function save_cv_results(filename, replicates, grids)
+function save_cv_results(filename, problem_info, replicates, grids)
     ϵ_grid, s_grid = grids
+    example, subsets, nfeatures, nclasses, sparse2dense, kernel = problem_info
+    ntrain, nvalidate, ntest = subsets
     delim = ','
+    header = ["example" "ntrain" "nvalidate" "ntest" "nfeatures" "nclasses" "sparse2dense" "kernel" "replicate" "fold" "epsilon" "sparsity" "time" "train" "validation" "test"]
     open(filename, "w+") do io
-        writedlm(io, ["replicate" "fold" "epsilon" "sparsity" "time" "train" "validation" "test"], delim)
+        writedlm(io, header, delim)
         for (r, replicate) in enumerate(replicates)
             for k in eachindex(replicate[1]), j in eachindex(ϵ_grid), i in eachindex(s_grid)
                 ϵ, s = ϵ_grid[j], 100*s_grid[i]
                 Tr, V, T, t = [arr[k][i,j] for arr in replicate]
-                writedlm(io, Any[r k ϵ s t Tr V T], delim)
+                writedlm(io, Any[example ntrain nvalidate ntest nfeatures nclasses sparse2dense kernel r k ϵ s t Tr V T], delim)
             end
         end
     end

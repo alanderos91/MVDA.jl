@@ -294,33 +294,14 @@ Returns the number of samples, number of features, and number of categories, res
 probdims(problem::MVDAProblem) = (problem.n, problem.p, problem.c)
 
 """
-    predict(problem::MVDAProblem, x::AbstractVector)
+    predict(problem::MVDAProblem, x)
 
-Predict the vertex value of a sample/instance `x` based on the fitted model in `problem`.
+When `x` is a vector, predict the vertex value of a sample/instance `x` based on the fitted model in `problem`.
+Otherwise if `x` is a matrix then each sample is assumed to be aligned along rows (e.g. `x[i,:]` is sample `i`).
 
-See also: [`predict(problem::MVDAProblem, X::AbstractMatrix)`](@ref), [`classify`](@ref)
+See also: [`classify`](@ref)
 """
-predict(problem::MVDAProblem, x::AbstractVector) = __predict__(problem.kernel, problem, x)
-
-"""
-    predict(problem::MVDAProblem, X::AbstractMatrix)
-
-Predict the vertex values of samples/instances in `X`, assumed to be aligned along each row (e.g. `X[i,:]` for sample `i`).
-
-See also: [`predict(problem::MVDAProblem, x::AbstractVector)`](@ref), [`classify`](@ref)
-"""
-function predict(problem::MVDAProblem, X::AbstractMatrix)
-    @unpack c = problem
-    n = size(X, 1)
-    Y = Matrix{floattype(problem)}(undef, n, c-1)
-    nthreads = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    @batch per=core for i in 1:n
-        Y[i,:] .= predict(problem, view(X, i, :))
-    end
-    BLAS.set_num_threads(nthreads)
-    return Y
-end
+predict(problem::MVDAProblem, x) = __predict__(problem.kernel, problem, x)
 
 function __predict__(::Nothing, problem::MVDAProblem, x::AbstractVector)
     @unpack p, proj, intercept = problem
@@ -331,8 +312,16 @@ function __predict__(::Nothing, problem::MVDAProblem, x::AbstractVector)
     return y
 end
 
+function __predict__(::Nothing, problem::MVDAProblem, X::AbstractMatrix)
+    @unpack p, proj, intercept = problem
+    B = view(proj.all, 1:p, :)
+    B0 = view(proj.all, p+intercept, :)
+    Y = X * B
+    intercept && (Y .+= B0')
+    return Y
+end
+
 function __predict__(::Kernel, problem::MVDAProblem, x::AbstractVector)
-    n = problem.n
     c = problem.c
     κ = problem.kernel
     Γ = problem.proj.all
@@ -341,7 +330,7 @@ function __predict__(::Kernel, problem::MVDAProblem, x::AbstractVector)
     ϕ = zeros(floattype(problem), c-1)
     for (i, xᵢ) in enumerate(eachrow(X))
         k = κ(xᵢ, x)
-        γ = view(Γ, i, :)
+        γ = Γ[i,:]
         @inbounds for j in eachindex(ϕ)
             ϕ[j] = muladd(k, γ[j], ϕ[j])
         end
@@ -357,39 +346,47 @@ function __predict__(::Kernel, problem::MVDAProblem, x::AbstractVector)
     return ϕ
 end
 
-"""
-    classify(problem::MVDAProblem, X::AbstractMatrix)
-
-Classify the samples/instances in `X` based on the model in `problem`.
-
-Each sample is assumed to be aligned along rows (e.g. `X[i,:]` is sample `i`).
-See also: [`classify(problem::MVDAProblem, x::AbstractVector)`](@ref), [`predict`](@ref)
-"""
-function classify(problem::MVDAProblem, X::AbstractMatrix)
+function __predict__(::Kernel, problem::MVDAProblem, X::AbstractMatrix)
+    @unpack c = problem
     n = size(X, 1)
+    Y = Matrix{floattype(problem)}(undef, n, c-1)
+    nthreads = BLAS.get_num_threads()
+    BLAS.set_num_threads(1)
+    @batch per=core for i in 1:n
+        Y[i,:] .= predict(problem, X[i,:])
+    end
+    BLAS.set_num_threads(nthreads)
+    return Y
+end
+
+"""
+    classify(problem::MVDAProblem, x)
+
+Classify the samples/instances in `x` based on the model in `problem`.
+
+If `x` is a vector then it is treated as an instance.
+Otherwise if `x` is a matrix then each sample is assumed to be aligned along rows (e.g. `x[i,:]` is sample `i`).
+See also: [`predict`](@ref)
+"""
+classify(problem::MVDAProblem, x) = __classify__(problem, predict(problem, x))
+
+function __classify__(problem::MVDAProblem, y::AbstractVector)
+    @unpack vertex, vertex2label = problem
+    distances = [norm(y - vertex[j]) for j in eachindex(vertex)]
+    j = argmin(distances)
+    return problem.vertex2label[vertex[j]]
+end
+
+function __classify__(problem::MVDAProblem, Y::AbstractMatrix)
+    n = size(Y, 1)
     L = Vector{valtype(problem.vertex2label)}(undef, n)
     nthreads = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
     @batch per=core for i in eachindex(L)
-        L[i] = classify(problem, X[i,:])
+        L[i] = __classify__(problem, Y[i,:])
     end
     BLAS.set_num_threads(nthreads)
     return L
-end
-
-"""
-    classify(problem::MVDAProblem, x::AbstractVector)
-
-Classify the sample/instance `x` based on the model in `problem`.
-
-See also: [`classify(problem::MVDAProblem, X::AbstractMatrix)`](@ref), [`predict`](@ref)
-"""
-function classify(problem::MVDAProblem, x::AbstractVector)
-    y = predict(problem, x)
-    v = problem.vertex
-    distances = [norm(y - v[j]) for j in eachindex(v)]
-    j = argmin(distances)
-    return problem.vertex2label[v[j]]
 end
 
 function Base.show(io::IO, problem::MVDAProblem)
