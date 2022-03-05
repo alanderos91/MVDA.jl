@@ -29,7 +29,7 @@ function __plot_accuracy__(fig, xs, ys, n, d, σ, marker, color)
     plot!(fig, xs, ys,
         title=latexstring("n=$(n)"),
         xlabel="target sparsity (%)",
-        ylabel="classification accuracy (%)",
+        ylabel="accuracy (%)",
         xticks=0:10:100,
         yticks=0:10:100,
         xlims=(-5,105),
