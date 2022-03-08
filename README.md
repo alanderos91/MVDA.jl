@@ -44,7 +44,12 @@ MVDA.list_datasets()        # lists available demo datasets
 df = MVDA.dataset("iris")   # loads the `iris` dataset as a DataFrame
 ```
 
-## Creating an instance of the MVDA problem
+## Creating an instance of a MVDA problem
+
+The `MVDAProblem` type accepts data as two arguments: a `Vector` of labels and a `Matrix` of features/predictors/covariates.
+
+<details>
+<summary>Click to expand</summary>
 
 ```julia
 using MVDA
@@ -85,16 +90,28 @@ problem.res.main.all    # full matrix
 problem.res.main.dim[1] # slice along column 1
 ```
 
+</details>
+
 ## Fitting a model
 
-The function `fit_MVDA` is the workhorse of this package. It comes in two flavors:
+The functions `MVDA.fit` and `MVDA.anneal` are the workhorses of this package.
 
-* `fit_MVDA(algorithm, problem, ϵ, sparsity)` solves the penalized problem along the annealing path; that is, as `ρ` approaches infinity. This handles *outer* iterations of a proximal distance algorithm.
-* `fit_MVDA(algorithm, problem, ϵ, ρ, sparsity)` solves the penalized problem for a particular value of `ρ`. This handles *inner* iterations of a proximal distance algorithm.
+* `MVDA.fit(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real; kwargs...)` solves the penalized problem along the annealing path; that is, as `ρ` approaches infinity. This handles *outer* iterations.
+* `MVDA.anneal(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::Real, s::Real; kwargs...)` solves the penalized problem for a particular value of `ρ`. This handles *inner* iterations of a proximal distance algorithm.
 
+There are also `MVDA.fit!` and `MVDA.anneal!` (called internally by there)
 The default annealing schedule is $\rho(t) = \min\{\rho_{\max}, \rho_{0} 1.2^{t}\}$ at outer iteration $t$, with $\rho_{0} = 1$ and $\rho_{\max} = 10^{8}$.
 
 Optional arguments are specified with `<option>=<value>` pairs; examples highlighted below.
+
+The special case with `s=0` requires some care because the problem is ill-defined.
+For this case we provide `MVDA.init!` to fit a $\lambda$-regularized model.
+
+### Example with `MVDA.fit`
+
+<details>
+<summary>Click to expand</summary>
+
 ```julia
 using MVDA, Random
 
@@ -107,40 +124,45 @@ n, p, c = MVDA.probdims(problem)
 # IMPORTANT: initialize coefficients
 randn!(problem.coeff.all)
 
-# call fit_MVDA with algorithm MMSVD to fit all categories simultaneously
+# fit VDA model using SVD-based variant
 
-ϵ = 0.5 * sqrt(2*c/(c-1)) # use maximum radius for non-overlapping deadzones
-sparsity = 0.0            # no sparsity
+ϵ = MVDA.maximal_deadzone(problem)  # use maximum radius for non-overlapping deadzones
+sparsity = 0.25                     # drop 1 feature
 
-result = @time fit_MVDA(MMSVD(), problem, ϵ, sparsity,
+result = @time MVDA.fit(MMSVD(), problem, ϵ, sparsity,
     nouter=100,     # maximum number of outer iterations (ρ to try)
     ninner=10^4,    # maximum number of inner iterations (affects convergence for ρ fixed)
     dtol=1e-6,      # control quality of distance squared, i.e. dist(B,S)² < 1e-6
     rtol=1e-6,      # check progress made on distance squared on relative scale
     rho_init=1.0,   # initial value for rho
     rho_max=1e8,    # maximum value for rho
-    gtol=1e-6,      # control quality of solutions for fixed row, i.e. ∇f(B) < 1e-6
+    gtol=1e-6,      # control quality of solutions for fixed rho, i.e. |∇f(B)| < 1e-6
     nesterov_threshold=10,  # minimum number of steps to take WITHOUT Nesterov accel.
     verbose=true,   # print convergence information
 )
 
 result.iters        # total number of iterations taken, inner + outer
 result.loss         # empirical risk
-result.objective    # 0.5 * (empirical risk + ρ × ∑ scaled distance)
-result.distance     # ∑ scaled distance
-result.gradient     # ∇f(B) = ∇g(B∣B)
+result.objective    # 0.5 * (empirical risk + ρ × dist(B,S)²)
+result.distance     # dist(B,S)
+result.gradient     # |∇f(B)|² = |∇g(B∣B)|²
 
 accuracy = sum( MVDA.classify(problem, X) .== targets ) / length(targets) * 100;
-println("Training accuracy is ", accuracy, "%.") # should be around 90-97%
+println("Training accuracy is ", accuracy, "%.") # should be >90%
+
+problem.coeff.all   # estimate of coefficients before projection
+problem.proj.all    # estimate of coefficient after projection
 ```
 
-## Cross-Validation
+</details>
 
-The function `cv_MVDA` can be used to tune `ϵ` and `sparsity` via $k$-fold cross-validation.
-It supports the same optional arguments as `fit_MVDA`.
+### Example with `MVDA.anneal`
+
+<details>
+<summary>Click to expand</summary>
 
 ```julia
-using MVDA, Random, Statistics, Plots
+using MVDA, Random
 
 # create the problem instance
 df = MVDA.dataset("iris")
@@ -151,46 +173,180 @@ n, p, c = MVDA.probdims(problem)
 # IMPORTANT: initialize coefficients
 randn!(problem.coeff.all)
 
-ϵ_grid = range(1e-2, 0.5 * sqrt(2*c/(c-1)), length=10)
-s_grid = [0.0, 0.25, 0.5, 0.75]
+# fit VDA model using SVD-based variant
 
-result = cv_MVDA(MMSVD(), problem, ϵ_grid, s_grid,
-    nfolds=10,      # number of folds
-    at=0.8,         # proportion in training set; rest goes to holdout set for testing
+ϵ = MVDA.maximal_deadzone(problem)  # use maximum radius for non-overlapping deadzones
+ρ = 1.0                             # usual starting point
+sparsity = 0.25                     # drop 1 feature
+
+result = @time MVDA.anneal(MMSVD(), problem, ϵ, ρ, sparsity,
+    ninner=10^4,    # maximum number of inner iterations (affects convergence for ρ fixed)
+    gtol=1e-6,      # control quality of solutions for fixed rho, i.e. |∇f(B)| < 1e-6
+    nesterov_threshold=10,  # minimum number of steps to take WITHOUT Nesterov accel.
+    verbose=true,   # print convergence information
+)
+
+result.loss         # empirical risk
+result.objective    # 0.5 * (empirical risk + ρ × dist(B,S)²)
+result.distance     # dist(B,S)
+result.gradient     # |∇f(B)|² = |∇g(B∣B)|²
+
+accuracy = sum( MVDA.classify(problem, X) .== targets ) / length(targets) * 100;
+println("Training accuracy is ", accuracy, "%.") # should be >90%
+
+problem.coeff.all   # estimate of coefficients before projection
+problem.proj.all    # estimate of coefficient after projection
+```
+
+</details>
+
+### Example with `MVDA.init!`:
+
+<details>
+<summary>Click to expand</summary>
+
+```julia
+using MVDA, Random
+
+# create the problem instance
+df = MVDA.dataset("iris")
+targets, X = Vector(df[!,1]), Matrix{Float64}(df[!,2:end])
+problem = MVDAProblem(targets, X)
+n, p, c = MVDA.probdims(problem)
+
+# fit VDA model using SVD-based variant
+ϵ = MVDA.maximal_deadzone(problem)  # use maximum radius for non-overlapping deadzones
+λ = 1e-3
+
+result = @time MVDA.init!(MMSVD(), problem, ϵ, λ,
+    maxiter=10^4,   # maximum number of iterations
+    gtol=1e-6,      # control quality of solutions for fixed rho, i.e. |∇f(B)| < 1e-6
+    nesterov_threshold=10,  # minimum number of steps to take WITHOUT Nesterov accel.
+    verbose=true,   # print convergence information
+)
+
+result.iters        # total number of iterations taken, inner + outer
+result.loss         # empirical risk
+result.objective    # 0.5 * (empirical risk + ρ × dist(B,S)²)
+result.gradient     # |∇f(B)|² = |∇g(B∣B)|²
+
+accuracy = sum( MVDA.classify(problem, X) .== targets ) / length(targets) * 100;
+println("Training accuracy is ", accuracy, "%.") # should be >90%
+
+problem.coeff.all   # estimate of coefficients before projection
+problem.proj.all    # estimate of coefficient after projection
+```
+
+</details>
+
+## Cross-Validation
+
+The function `MVDA.cv` can be used to tune `ϵ` and `sparsity` via $k$-fold cross-validation.
+It supports the same optional arguments as `MVDA.fit`.
+The function `MVDA.cv_estimation` is used to carry out repeated cross-validation.
+
+The special case with sparsity `s=0` is handled using a regularized version of the problem.
+
+<details>
+<summary> Example of k-fold cross validation</summary>
+
+```julia
+using MVDA, Random, Statistics, MLDataUtils, StableRNGs
+
+# create the problem instance
+df = MVDA.dataset("zoo")
+data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end])) # store as a Tuple
+shuffled_data = shuffleobs(data, obsdim=1, rng=StableRNG(1234))
+problem = MVDAProblem(shuffled_data..., intercept=true, kernel=nothing)
+n, p, c = MVDA.probdims(problem)
+
+# IMPORTANT: initialize coefficients
+fill!(problem.coeff.all, 1/(p+1))
+
+ϵ_grid = range(1e-2, MVDA.maximal_deadzone(problem), length=3)
+s_grid = [1-k/p for k in p:-1:0]
+
+result = @time MVDA.cv(MMSVD(), problem, (ϵ_grid, s_grid),
+    nfolds=3,       # number of folds
+    at=0.9,         # proportion in training set; rest goes to holdout set for testing
     rtol=0.0,
-    gtol=1e-8,
-    dtol=1e-6,
+    gtol=1e-3,
+    dtol=1e-3,
+    ninner=10^6,
+    nouter=10^2,
+    maxiter=10^4,   # remaining options used only when s=0
+    lambda=1e-3,
 );
 
-result.epsilon;     # ϵ_grid
-result.sparsity;    # s_grid
-result.score;       # 3D array of [Tr, V, T] where Tr, V, and T are training, validation, and testing errors as percentages, respectively.
-
-# average validation error over folds
-avg_score = map(x -> x[2], dropdims(mean(result.score, dims=3), dims=3))
-
-# select (sparsity, ϵ) pair minimizing validation error
-i,j=Tuple(argmin(avg_score))
-
-# visualize errors over (sparsity, ϵ) pairs as a contour map
-contourf(result.epsilon, result.sparsity .* 100, avg_score,
-    color=:vik,
-    xlabel="ϵ",
-    ylabel="Sparsity (%)",
-    title="Validation Error",
-    yticks=0:10:100,
-    clims=(0,100)
-)
-
-# highlight the optimal pair
-scatter!((result.epsilon[j], result.sparsity[i]*100),
-    legend=false,
-    marker=:circ,
-    markersize=8,
-    markercolor=:white,
-    grid=false
-)
+# result contains 4 metrics: time spent fitting a model, training error, validation error, and test error
+# each is stored in a field, `time`, `train`, `validation`, `test`, which stores results specific to each fold
+result.time[1]    # timing result across (s, ϵ) grid
+mean(result.test) # average cross validation error (over folds) across (s, ϵ) grid
 ```
+
+</details>
+
+<details>
+<summary> Example of repeated k-fold cross validation</summary>
+
+```julia
+using MVDA, Random, Statistics, MLDataUtils, StableRNGs
+
+# create the problem instance
+df = MVDA.dataset("zoo")
+data = (Vector(df[!,1]), Matrix{Float64}(df[!,2:end])) # store as a Tuple
+shuffled_data = shuffleobs(data, obsdim=1, rng=StableRNG(1234))
+problem = MVDAProblem(shuffled_data...)
+n, p, c = MVDA.probdims(problem)
+
+# IMPORTANT: initialize coefficients
+fill!(problem.coeff.all, 1/(p+1))
+
+ϵ_grid = range(1e-2, MVDA.maximal_deadzone(problem), length=3)
+s_grid = [1-k/p for k in p:-1:0]
+
+results = @time MVDA.cv_estimation(MMSVD(), problem, (ϵ_grid, s_grid),
+    nreplicates=50, # number of replicates
+    nfolds=3,       # number of folds
+    at=0.9,         # proportion in training set; rest goes to holdout set for testing
+    rtol=0.0,
+    gtol=1e-3,
+    dtol=1e-3,
+    ninner=10^6,
+    nouter=10^2,
+    maxiter=10^4,   # remaining options used only when s=0
+    lambda=1e-3,
+);
+
+# The results object contains individual cv results for each replicate.
+# The following computes cv validation error across replicates.
+avg_cv_error = map(r -> mean(r.validation), results)
+
+# create a multiobjective score for maximizing accuracy, parsimony, and the deadzone.
+function score(s_grid, ϵ_grid, mat)
+    # ordering matters here!
+    [(100-mat[i,j], 100*s_grid[i], ϵ_grid[j]) for i in eachindex(s_grid), j in eachindex(ϵ_grid)]
+end
+
+# check optimal model for a particular replicate
+maximum(score(s_grid, ϵ_grid, avg_cv_error[1]))
+
+# check optimal model across replicates
+acc_opt, s_opt, ϵ_opt = zeros(50), zeros(50), zeros(50)
+for (k, rep) in enumerate(avg_cv_error)
+    acc_opt[k], s_opt[k], ϵ_opt[k] = maximum(score(s_grid, ϵ_grid, rep))
+end
+
+median(acc_opt), median(s_opt), median(ϵ_opt) 
+```
+
+</details>
+
+### The ordering in sparsity grid (`s_grid` in examples) is important!
+
+- Going from `s=0` to `s=1` traverses model sizes from dense to sparse.
+- Going from `s=1` to `s=0` traverses model sizes from sparse to dense.
+- Interpretation is lost if `s_grid` is not monotonic.
 
 ## Running package tests
 

@@ -343,7 +343,7 @@ function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::R
 end
 
 """
-    cv_MVDA(algorithm, problem, grids; [at], [kwargs...])
+    cv(algorithm, problem, grids; [at], [kwargs...])
 
 Split data in `problem` into cross-validation and a test sets, then run cross-validation over the `grids`.
 
@@ -361,7 +361,7 @@ function cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{E,S}; a
 end
 
 """
-    cv_MVDA(algorithm, problem, grids, dataset_split; [kwargs...])
+    cv(algorithm, problem, grids, dataset_split; [kwargs...])
 
 Run k-fold cross-validation over hyperparameters `(ϵ, s)` for deadzone radius and sparsity level, respectively.
 
