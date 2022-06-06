@@ -31,6 +31,14 @@ julia>                                  # starts with default prompt
 Start Julia from the command line with `julia --project=/myhome/dir/MVDA` as a shortcut or simply run `] activate /myhome/dir/MVDA`.
 Once in the correct project environment, simply run `using MVDA` to get started.
 
+## Running package tests
+
+In Julia, with the `MVDA` environment activated, enter package mode and then run the `test` command:
+
+```julia
+(MVDA) pkg> test # everything should pass!
+```
+
 # Examples 
 Not all functions in this package are exported, so they must be qualified with `MVDA.<function name>`.
 The following examples highlight the most important functions.
@@ -123,6 +131,7 @@ n, p, c = MVDA.probdims(problem)
 
 # IMPORTANT: initialize coefficients
 randn!(problem.coeff.all)
+copyto!(problem.coeff_prev.all, problem.coeff.all)
 
 # fit VDA model using SVD-based variant
 
@@ -172,6 +181,7 @@ n, p, c = MVDA.probdims(problem)
 
 # IMPORTANT: initialize coefficients
 randn!(problem.coeff.all)
+copyto!(problem.coeff_prev.all, problem.coeff.all)
 
 # fit VDA model using SVD-based variant
 
@@ -262,6 +272,7 @@ n, p, c = MVDA.probdims(problem)
 
 # IMPORTANT: initialize coefficients
 fill!(problem.coeff.all, 1/(p+1))
+copyto!(problem.coeff_prev.all, problem.coeff.all)
 
 ϵ_grid = range(1e-2, MVDA.maximal_deadzone(problem), length=3)
 s_grid = [1-k/p for k in p:-1:0]
@@ -301,6 +312,7 @@ n, p, c = MVDA.probdims(problem)
 
 # IMPORTANT: initialize coefficients
 fill!(problem.coeff.all, 1/(p+1))
+copyto!(problem.coeff_prev.all, problem.coeff.all)
 
 ϵ_grid = range(1e-2, MVDA.maximal_deadzone(problem), length=3)
 s_grid = [1-k/p for k in p:-1:0]
@@ -348,10 +360,62 @@ median(acc_opt), median(s_opt), median(ϵ_opt)
 - Going from `s=1` to `s=0` traverses model sizes from sparse to dense.
 - Interpretation is lost if `s_grid` is not monotonic.
 
-## Running package tests
+# Nonlinear Vertex Discriminant Analysis
 
-In Julia, with the `MVDA` environment activated, enter package mode and then run the `test` command:
+Our implementation of nonlinear VDA transforms the original classification data using a positive definite kernel.
+In this setting model coefficients, `problem.coeff.all`, represent the contribution of individual samples to the classifier's decision boundary.
+Specificially, `problem.coeff.all[i, :] .== 0` implies sample `i` has some influence on the decision boundary in vertex-space.
+On the other hand, `problem.coeff.all[i, :] .!= 0` implies sample `i` has no influence over the decision boundary.
+Users should therefore note that the shape of `problem.coeff.all`, as well as similar fields, is different in the nonlinear setting compared to the linear VDA.
+
+The `MVDAProblem` type supports kernels defined in [KernelFunctions.jl](https://github.com/JuliaGaussianProcesses/KernelFunctions.jl) through the `kernel` keyword.
+
+## Example with `RBFKernel`
+
+<details>
+<summary>Click to expand</summary>
 
 ```julia
-(MVDA) pkg> test # everything should pass!
+using MVDA, Random, KernelFunctions
+
+# create the problem instance
+df = MVDA.dataset("spiral")
+targets, X = Vector(df[!,1]), Matrix{Float64}(df[!,2:end])
+problem = MVDAProblem(targets, X, kernel=RBFKernel(), intercept=true)
+n, p, c = MVDA.probdims(problem)
+
+# IMPORTANT: initialize coefficients
+randn!(problem.coeff.all)
+copyto!(problem.coeff_prev.all, problem.coeff.all)
+
+# fit VDA model using SVD-based variant
+
+ϵ = MVDA.maximal_deadzone(problem)  # use maximum radius for non-overlapping deadzones
+sparsity = 0.5                     # target 50% nonzero weights/coefficients
+
+result = @time MVDA.fit(MMSVD(), problem, ϵ, sparsity,
+    nouter=100,     # maximum number of outer iterations (ρ to try)
+    ninner=10^4,    # maximum number of inner iterations (affects convergence for ρ fixed)
+    dtol=1e-6,      # control quality of distance squared, i.e. dist(B,S)² < 1e-6
+    rtol=1e-6,      # check progress made on distance squared on relative scale
+    rho_init=1.0,   # initial value for rho
+    rho_max=1e8,    # maximum value for rho
+    gtol=1e-6,      # control quality of solutions for fixed rho, i.e. |∇f(B)| < 1e-6
+    nesterov_threshold=10,  # minimum number of steps to take WITHOUT Nesterov accel.
+    verbose=true,   # print convergence information
+)
+
+result.iters        # total number of iterations taken, inner + outer
+result.loss         # empirical risk
+result.objective    # 0.5 * (empirical risk + ρ × dist(B,S)²)
+result.distance     # dist(B,S)
+result.gradient     # |∇f(B)|² = |∇g(B∣B)|²
+
+accuracy = sum( MVDA.classify(problem, X) .== targets ) / length(targets) * 100;
+println("Training accuracy is ", accuracy, "%.") # should be >90%
+
+problem.coeff.all   # estimate of coefficients before projection
+problem.proj.all    # estimate of coefficient after projection
 ```
+
+</details>
