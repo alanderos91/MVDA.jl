@@ -1,58 +1,123 @@
-using DataDeps
+function simulate_synthetic(local_dir, dataset)
+    # Simulate the data.
+    tmpfile = joinpath(local_dir, "$(dataset).tmp")
+    m, n, rng = 10^3, 500, StableRNG(2000)
+    L, X = synthetic(1,1,1e-2,0.4,1e-4; rng=rng, prob=1.0, m=m, n=n)
+    df = hcat(DataFrame(class=L), DataFrame(X, :auto))
+    perm = Random.randperm(rng, size(df, 1))
+    foreach(col -> permute!(col, perm), eachcol(df))
+    CSV.write(tmpfile, df, writeheader=true)
 
-register(DataDep(
-    "synthetic",
+    # Standardize format.
+    local_path = MVDA.process_dataset(tmpfile, dataset;
+        label_mapping=string,
+        header=true,
+        class_index=1,
+        variable_indices=2:ncol(df),
+        ext=".csv",
+    )
+
+    # Store column information.
+    column_info = [["class", "causal1", "causal2"]; ["redundant$(i)" for i in 3:n]]
+    column_info_df = DataFrame(columns=column_info)
+    CSV.write(joinpath(local_dir, "$(dataset).info"), column_info_df; writeheader=false, delim=',')
+    
+    return local_path
+end
+
+push!(
+    MESSAGES[],
     """
-    Dataset: synthetic
+    ## Dataset: synthetic
 
+    **2 classes / 1000 instances / 500 variables**
+    
     A simulated multivariate normal.
-    Classes are determined by the first two dimensions, which correspond to signs of X*beta with beta[1] = 10, beta[2] = -10.
-    Covariance structure is as follows:
 
-    Σ[1,1] = 1, Σ[2,2] = 3, Σ[i,i] = 2
-    Σ[1,2] = 0.9
-    Σ[i,j] = 1e-3*randn()
+    Classes are determined by the first two variables using the signs of `X*b`
+    using `b[1] = 10`, `b[2] = -10`, and `b[j] = 0` otherwise.
+    
+    Covariance structure is as follows
 
-    Observations: 1000
-    Features:     500
-    Classes:      2
-    """,
-    "script", # nothing to download
-    "514ef72019b85634859baf459b38f37295d5fcc84d06be7d8e4a71a99a74cbdf";
-    fetch_method=function(unused, localdir)
-        #
-        rng = StableRNG(2000)
-        (m, n) = (10^3, 500)
+    ```julia
+    Σ[1,1] = 1
+    Σ[2,2] = 1
+    Σ[i,i] = 1e-2 for i=3, 4, …, 500
+    Σ[1,2] = 0.4
+    Σ[i,j] = 1e-4
+    ```
+    """
+)
 
-        # covariance matrix
-        Σ = Matrix{Float64}(2*I, n, n)
-        for j in 1:n, i in j+1:n
-            Σ[j,i] = 1e-3*randn(rng)
-        end
-        Σ[1,1] = 1.0
-        Σ[2,2] = 3.0
-        Σ[1,2] = 0.9
+push!(REMOTE_PATHS[], "<simulate:synthetic>")
 
-        L, _ = cholesky(Symmetric(Σ))
+push!(CHECKSUMS[], "76716cadf67586103ddcd55c8e16fae01af1750338bfe821903de47155c4583e")
 
-        # simulate data
-        X = Matrix{Float64}(undef, m, n)
-        for i in axes(X, 1)
-            @views X[i, :] .= L*randn(rng, n)
-        end
+push!(FETCH_METHODS[], (unused_path, local_dir) -> simulate_synthetic(local_dir, "synthetic"))
 
-        # coefficients
-        beta = zeros(n)
-        beta[1] = 10.0
-        beta[2] = -10.0
+push!(POST_FETCH_METHODS[], identity)
 
-        # targets
-        y = sign.(X*beta)
-        target = map(yi -> yi > 0 ? 'A' : 'B', y)
+push!(DATASETS[], "synthetic")
 
-        local_file = joinpath(localdir, "data.csv")
-        df = hcat(DataFrame(target=target), DataFrame(X, :auto))
-        CSV.write(local_file, df)
-        return local_file
-    end
-))
+function simulate_synthetic_hard(local_dir, dataset)
+    # Simulate the data.
+    tmpfile = joinpath(local_dir, "$(dataset).tmp")
+    m, n, rng = 10^3, 500, StableRNG(2000)
+    L, X = synthetic(1,1,1e-2,0.4,1e-4; rng=rng, prob=0.9, m=m, n=n)
+    df = hcat(DataFrame(class=L), DataFrame(X, :auto))
+    perm = Random.randperm(rng, size(df, 1))
+    foreach(col -> permute!(col, perm), eachcol(df))
+    CSV.write(tmpfile, df, writeheader=true)
+
+    # Standardize format.
+    local_path = MVDA.process_dataset(tmpfile, dataset;
+        label_mapping=string,
+        header=true,
+        class_index=1,
+        variable_indices=2:ncol(df),
+        ext=".csv",
+    )
+
+    # Store column information.
+    column_info = [["class", "causal1", "causal2"]; ["redundant$(i)" for i in 3:n]]
+    column_info_df = DataFrame(columns=column_info)
+    CSV.write(joinpath(local_dir, "$(dataset).info"), column_info_df; writeheader=false, delim=',')
+
+    return local_path
+end
+
+push!(
+    MESSAGES[],
+    """
+    ## Dataset: synthetic-hard
+
+    **2 classes / 1000 instances / 500 variables**
+    
+    A simulated multivariate normal.
+
+    Classes are determined by the first two variables using the signs of `X*b`
+    using `b[1] = 10`, `b[2] = -10`, and `b[j] = 0` otherwise.
+    
+    Covariance structure is as follows
+
+    ```julia
+    Σ[1,1] = 1
+    Σ[2,2] = 1
+    Σ[i,i] = 1e-2 for i=3, 4, …, 500
+    Σ[1,2] = 0.4
+    Σ[i,j] = 1e-4
+    ```
+
+    Bayes error is expected to be ≈0.1 due to random class inversions.
+    """
+)
+
+push!(REMOTE_PATHS[], "<simulate:synthetic-hard>")
+
+push!(CHECKSUMS[], "7c1e5000fd94933eac39dbf1594fc1a4fce6eca4f8484b552c937e838a833378")
+
+push!(FETCH_METHODS[], (unused_path, local_dir) -> simulate_synthetic_hard(local_dir, "synthetic-hard"))
+
+push!(POST_FETCH_METHODS[], identity)
+
+push!(DATASETS[], "synthetic-hard")

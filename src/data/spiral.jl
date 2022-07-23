@@ -1,58 +1,117 @@
-using DataDeps
+function simulate_spiral(local_dir, dataset)
+    # Simulate the data.
+    tmpfile = joinpath(local_dir, "$(dataset).tmp")
+    rng = StableRNG(1903)
+    L, X = spiral((600, 300, 100);
+        rng=rng,
+        max_radius=7.0,
+        x0=-3.5,
+        y0=3.5,
+        angle_start=pi/8,
+        prob=1.0,
+    )
+    x, y = view(X, :, 1), view(X, :, 2)
+    df = DataFrame(class=L, x=x, y=y)
+    perm = Random.randperm(rng, size(df, 1))
+    foreach(col -> permute!(col, perm), eachcol(df))
+    CSV.write(tmpfile, df)
 
-register(DataDep(
-    "spiral",
+    # Standardize format.
+    local_path = MVDA.process_dataset(tmpfile, dataset;
+        label_mapping=string,
+        header=true,
+        class_index=1,
+        variable_indices=2:ncol(df),
+        ext=".csv",
+    )
+
+    # Store column information.
+    column_info = ["class", "x", "y"]
+    column_info_df = DataFrame(columns=column_info)
+    CSV.write(joinpath(local_dir, "$(dataset).info"), column_info_df; writeheader=false, delim=',')
+
+    return local_path
+end
+
+push!(
+    MESSAGES[],
     """
-    Dataset: spiral
-    Credit: https://smorbieu.gitlab.io/generate-datasets-to-understand-some-clustering-algorithms-behavior/
+    ## Dataset: spiral
 
-    A simulated dataset of three noisy spirals.
+    **3 classes / 1000 instances / 2 variables**
+    
+    Adapted from: https://smorbieu.gitlab.io/generate-datasets-to-understand-some-clustering-algorithms-behavior/
 
-    Observations: 1000
-    Features:     2
-    Classes:      3
-    """,
-    "script", # nothing to download
-    "51d3cf8d223edcacb65db752ff3b0487722951b6e00cb566c3e41a574189c20e";
-    fetch_method=function(unused, localdir)
-        # Parameters
-        N           = 1000
-        max_A       = 600
-        max_B       = 300
-        max_C       = N - max_A - max_B
-        max_radius  = 7.0
-        x0          = -3.5
-        y0          = 3.5
-        angle_start = π / 8
-        seed        = 1903
+    Simulation of a noisy pattern with 3 spirals.
+    """
+)
 
-        # Simulate the data.
-        rng = StableRNG(seed)
-        target, x, y = Vector{Char}(undef, N), zeros(N), zeros(N)
-        for i in 1:N
-        if i ≤ max_A
-            (class, k, n, θ) = ('A', i, max_A, angle_start)
-            noise = 0.1
-        elseif i ≤ max_A + max_B
-            (class, k, n, θ) = ('B', i-max_A+1, max_B, angle_start + 2π/3)
-            noise = 0.2
-        else
-            (class, k, n, θ) = ('C', i-max_A-max_B+1, max_C, angle_start + 4π/3)
-            noise = 0.3
-        end
-        # Compute coordinates.
-        angle = θ + π * k / n
-        radius = max_radius * (1 - k / (n + n / 5))
+push!(REMOTE_PATHS[], "<simulate:spiral>")
 
-        target[i] = class
-        x[i] = x0 + radius*cos(angle) + noise*randn(rng)
-        y[i] = y0 + radius*sin(angle) + noise*randn(rng)
-        end
-        local_file = joinpath(localdir, "data.csv")
-        df = DataFrame(target=target, x1=x, x2=y)
-        perm = Random.randperm(rng, size(df, 1))
-        foreach(col -> permute!(col, perm), eachcol(df))
-        CSV.write(local_file, df)
-        return local_file
-    end
-))
+push!(CHECKSUMS[], "97fa5e682081e01a94d3104260f9f317ec7c1e2a08e95ecb1d047c5c1bfaf196")
+
+push!(FETCH_METHODS[], (unused_path, local_dir) -> simulate_spiral(local_dir, "spiral"))
+
+push!(POST_FETCH_METHODS[], identity)
+
+push!(DATASETS[], "spiral")
+
+function simulate_spiral_hard(local_dir, dataset)
+    # Simulate the data.
+    tmpfile = joinpath(local_dir, "$(dataset).tmp")
+    rng = StableRNG(1903)
+    L, X = spiral((600, 300, 100);
+        rng=rng,
+        max_radius=7.0,
+        x0=-3.5,
+        y0=3.5,
+        angle_start=pi/8,
+        prob=0.9,
+    )
+    x, y = view(X, :, 1), view(X, :, 2)
+    df = DataFrame(class=L, x=x, y=y)
+    perm = Random.randperm(rng, size(df, 1))
+    foreach(col -> permute!(col, perm), eachcol(df))
+    CSV.write(tmpfile, df)
+
+    # Standardize format.
+    local_path = MVDA.process_dataset(tmpfile, dataset;
+        label_mapping=string,
+        header=true,
+        class_index=1,
+        variable_indices=2:ncol(df),
+        ext=".csv",
+    )
+
+    # Store column information.
+    column_info = ["class", "x", "y"]
+    column_info_df = DataFrame(columns=column_info)
+    CSV.write(joinpath(local_dir, "$(dataset).info"), column_info_df; writeheader=false, delim=',')
+
+    return local_path
+end
+
+push!(
+    MESSAGES[],
+    """
+    ## Dataset: spiral-hard
+
+    **3 classes / 1000 instances / 2 variables**
+    
+    Adapted from: https://smorbieu.gitlab.io/generate-datasets-to-understand-some-clustering-algorithms-behavior/
+
+    Simulation of a noisy pattern with 3 spirals.
+
+    Bayes error is expected to be ≈0.1 due to random class inversions.
+    """
+)
+
+push!(REMOTE_PATHS[], "<simulate:spiral-hard>")
+
+push!(CHECKSUMS[], "8e4e2f53d7745b4dee52d5f7d3a279315f321e5616220215bedee9c30848245f")
+
+push!(FETCH_METHODS[], (unused_path, local_dir) -> simulate_spiral_hard(local_dir, "spiral-hard"))
+
+push!(POST_FETCH_METHODS[], identity)
+
+push!(DATASETS[], "spiral-hard")
