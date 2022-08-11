@@ -2,7 +2,7 @@ module MVDA
 
 # Dataset Management and I/O
 using DataFrames: copy, copyto!
-using CodecZlib, CSV, DataDeps, DataFrames, MLDataUtils, Printf, ProgressMeter
+using CodecZlib, CSV, DataDeps, DataFrames, MLDataUtils, MLLabelUtils, Printf, ProgressMeter
 
 # Math & Stats
 using Parameters
@@ -13,7 +13,8 @@ using Polyester
 
 # Imports
 import Base: show, iterate
-import MLDataUtils: classify, predict
+import MLDataUtils: classify, predict, ind2label, label2ind, isposlabel, isneglabel, islabelenc
+import MLLabelUtils: VectorLabelEncoding
 
 ##### DATA #####
 
@@ -92,24 +93,26 @@ end
 
 ##### IMPLEMENTATION #####
 
+include("encoding.jl")
 include("problem.jl")
-include("utilities.jl")
-include("projections.jl")
+# include("utilities.jl")
+# include("projections.jl")
 
-abstract type AbstractMMAlg end
+# abstract type AbstractMMAlg end
 
-include(joinpath("algorithms", "SD.jl"))
-include(joinpath("algorithms", "MMSVD.jl"))
-include(joinpath("algorithms", "CyclicVDA.jl"))
+# include(joinpath("algorithms", "SD.jl"))
+# include(joinpath("algorithms", "MMSVD.jl"))
+# include(joinpath("algorithms", "CyclicVDA.jl"))
 
-const DEFAULT_ANNEALING = geometric_progression
-const DEFAULT_CALLBACK = __do_nothing_callback__
-const DEFAULT_SCORE_FUNCTION = prediction_error
+# const DEFAULT_ANNEALING = geometric_progression
+# const DEFAULT_CALLBACK = __do_nothing_callback__
+# const DEFAULT_SCORE_FUNCTION = prediction_error
 
-include("fit.jl")
-include("cv.jl")
+# include("fit.jl")
+# include("cv.jl")
 
-export IterationResult, SubproblemResult
-export MVDAProblem, SD, MMSVD # CyclicVDA
+# export IterationResult, SubproblemResult
+# export MVDAProblem, SD, MMSVD # CyclicVDA
+export MVDAProblem, probdims, maximum_deadzone
 
 end
