@@ -284,30 +284,30 @@ function cv_error(df::DataFrame)
     return out
 end
 
-function plot_cv_paths(df::DataFrame, col::Symbol)
-    # Group by replicate and initialize figure based on selected column.
-    gdf = groupby(df, :replicate)
-    n = length(gdf)
-    fig = plot(
-        xlabel="Sparsity (%)",
-        ylabel=col == :time ? "Time (s)" : "Error (%)",
-        ylim=col == :time ? nothing : (-1,101),
-        xlim=(-1,101),
-        xticks=0:10:100,
-        yticks=col == :time ? nothing : 0:10:100,
-    )
+# function plot_cv_paths(df::DataFrame, col::Symbol)
+#     # Group by replicate and initialize figure based on selected column.
+#     gdf = groupby(df, :replicate)
+#     n = length(gdf)
+#     fig = plot(
+#         xlabel="Sparsity (%)",
+#         ylabel=col == :time ? "Time (s)" : "Error (%)",
+#         ylim=col == :time ? nothing : (-1,101),
+#         xlim=(-1,101),
+#         xticks=0:10:100,
+#         yticks=col == :time ? nothing : 0:10:100,
+#     )
 
-    # Plot paths from each replicate.
-    foreach(path -> plot!(path[!,:sparsity], path[!,col], lw=3, color=:black, alpha=1/n, label=nothing), gdf)
+#     # Plot paths from each replicate.
+#     foreach(path -> plot!(path[!,:sparsity], path[!,col], lw=3, color=:black, alpha=1/n, label=nothing), gdf)
 
-    # Highlight the mean and median paths.
-    f(a) = (; median=median(a), mean=mean(a))
-    tmp = combine(groupby(df, [:epsilon, :sparsity]), [col] => f => AsTable)
-    plot!(tmp.sparsity, tmp.mean, lw=3, color=:red, ls=:dash, label=nothing)   # mean
-    plot!(tmp.sparsity, tmp.median, lw=3, color=:blue, ls=:dot, label=nothing) # median
+#     # Highlight the mean and median paths.
+#     f(a) = (; median=median(a), mean=mean(a))
+#     tmp = combine(groupby(df, [:epsilon, :sparsity]), [col] => f => AsTable)
+#     plot!(tmp.sparsity, tmp.mean, lw=3, color=:red, ls=:dash, label=nothing)   # mean
+#     plot!(tmp.sparsity, tmp.median, lw=3, color=:blue, ls=:dot, label=nothing) # median
     
-    return fig
-end
+#     return fig
+# end
 
 """
 Returns the row index `j` corresponding to the optimal model.
@@ -362,30 +362,30 @@ function credible_intervals(df::DataFrame, credibility=19/20)
     return out
 end
 
-function plot_credible_intervals(df::DataFrame, col::Symbol)
-    # Plot the credible interval for the selected metric.
-    ys, lo, hi = df[!,Symbol(col, :_md)], df[!,Symbol(col, :_lo)], df[!,Symbol(col, :_hi)]
-    xs = df.sparsity
-    lower, upper = ys - lo, hi - ys
+# function plot_credible_intervals(df::DataFrame, col::Symbol)
+#     # Plot the credible interval for the selected metric.
+#     ys, lo, hi = df[!,Symbol(col, :_md)], df[!,Symbol(col, :_lo)], df[!,Symbol(col, :_hi)]
+#     xs = df.sparsity
+#     lower, upper = ys - lo, hi - ys
 
-    fig = plot(
-        xlabel="Sparsity (%)",
-        ylabel=col == :time ? "Time (s)" : "Error (%)",
-        ylim=col == :time ? nothing : (-1,101),
-        xlim=(-1,101),
-        xticks=0:10:100,
-    )
+#     fig = plot(
+#         xlabel="Sparsity (%)",
+#         ylabel=col == :time ? "Time (s)" : "Error (%)",
+#         ylim=col == :time ? nothing : (-1,101),
+#         xlim=(-1,101),
+#         xticks=0:10:100,
+#     )
 
-    # Add a point highlighting the optimal point + its credible interval.
-    s_opt, s_lo, s_hi = df[1, [:model_md, :model_lo, :model_hi]]
-    j = findlast(≤(s_opt), xs)
-    error_bars = [(s_opt - s_lo, s_hi - s_opt)]
-    scatter!((s_opt, ys[j]), xerr=error_bars, color=:black, markersize=6, markerstrokewidth=3, label="optimal model")
+#     # Add a point highlighting the optimal point + its credible interval.
+#     s_opt, s_lo, s_hi = df[1, [:model_md, :model_lo, :model_hi]]
+#     j = findlast(≤(s_opt), xs)
+#     error_bars = [(s_opt - s_lo, s_hi - s_opt)]
+#     scatter!((s_opt, ys[j]), xerr=error_bars, color=:black, markersize=6, markerstrokewidth=3, label="optimal model")
 
-    annotate!([ (0.0, 90.0, ("Sparsity: $(round(s_opt, digits=4))%", 10, :left)) ])
-    annotate!([ (0.0, 80.0, ("Error: $(round(ys[j], digits=4))%", 10, :left)) ])
+#     annotate!([ (0.0, 90.0, ("Sparsity: $(round(s_opt, digits=4))%", 10, :left)) ])
+#     annotate!([ (0.0, 80.0, ("Error: $(round(ys[j], digits=4))%", 10, :left)) ])
 
-    plot!(xs, ys, lw=3, ribbon=(lower, upper), label="95% credible interval", ls=:dash)
+#     plot!(xs, ys, lw=3, ribbon=(lower, upper), label="95% credible interval", ls=:dash)
 
-    return fig
-end
+#     return fig
+# end
