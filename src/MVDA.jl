@@ -103,7 +103,7 @@ include("callbacks.jl")
 
 abstract type AbstractMMAlg end
 
-# include(joinpath("algorithms", "SD.jl"))
+include(joinpath("algorithms", "SD.jl"))
 include(joinpath("algorithms", "MMSVD.jl"))
 # include(joinpath("algorithms", "CyclicVDA.jl"))
 
@@ -126,6 +126,6 @@ include("fit.jl")
 # export IterationResult, SubproblemResult
 # export MVDAProblem, SD, MMSVD # CyclicVDA
 export MVDAProblem, probdims, maximum_deadzone
-export MMSVD
+export MMSVD, SD
 
 end

@@ -1,88 +1,88 @@
 """
-Solve least squares problem via steepest descent.
+Solve via steepest descent on a quadratic surrogate.
 """
 struct SD <: AbstractMMAlg end
 
 # Initialize data structures.
-function __mm_init__(::SD, problem, ::Nothing)
-    @unpack X, coeff = problem
-    n, p, _ = probdims(problem)
+function __mm_init__(::SD, problem::MVDAProblem, ::Nothing)
+    @unpack coeff = problem
+    A = design_matrix(problem)
+    n, p, c = probdims(problem)
+    T = floattype(problem)
     nparams = ifelse(problem.kernel isa Nothing, p, n)
 
-    # residuals subroutine requires an object named Z; need to fix
-    Z = nothing
+    # projection
+    projection = StructuredL0Projection(nparams)
 
-    return (;
-    projection=StructuredL0Projection(nparams), Z=Z,
-    )
+    # constants
+    Abar = vec(mean(A, dims=1))
+
+    # worker arrays
+    Z = fill!(similar(A, n, c-1), zero(T))
+    buffer = fill!(similar(A, c-1, c-1), zero(T))
+
+    return (;projection=projection, Abar=Abar, Z=Z, buffer=buffer)
 end
 
-# Check for data structure allocations; otherwise initialize.
-function __mm_init__(::SD, problem, extras)
-    if :projection in keys(extras) && :Z in keys(extras) # TODO
-        return extras
-    else
-        __mm_init__(SD(), problem, nothing)
-    end
-end
-
-# Update data structures due to change in model subsets, k.
-__mm_update_sparsity__(::SD, problem, ϵ, ρ, k, extras) = nothing
+# Assume extras has the correct data structures.
+__mm_init__(::SD, problem::MVDAProblem, extras) = extras
 
 # Update data structures due to changing ρ.
-__mm_update_rho__(::SD, problem, ϵ, ρ, k, extras) = nothing
+__mm_update_rho__(::SD, problem::MVDAProblem, extras, lambda, rho) = nothing
 
-# Update data structures due to changing λ.
-__mm_update_lambda__(::SD, problem, ϵ, λ, extras) = nothing
+# Update data structures due to changing λ. 
+__mm_update_lambda__(::SD, problem::MVDAProblem, extras, lambda, rho) = nothing
 
-# Apply one update.
-function __mm_iterate__(::SD, problem, ϵ, ρ, k, extras)
-    @unpack coeff, proj, grad, res = problem
-    @unpack projection = extras
-    X = get_design_matrix(problem)
-    n, _, _ = probdims(problem)
+function __steepest_descent__(problem::MVDAProblem, extras, alpha, beta)
+    @unpack coeff, grad, res, intercept = problem
+    @unpack Abar, buffer = extras
+    A, G, g0 = design_matrix(problem), grad.slope, grad.intercept
+    AG, C, CtG = res.loss, res.dist, buffer # reuse residuals as buffers
     T = floattype(problem)
-    a², b² = 1/n, ρ
-
-    # Project and then evaluate gradient.
-    apply_projection(projection, problem, k)
-    __evaluate_residuals__(problem, ϵ, extras, true, true, false)
-    __evaluate_gradient__(problem, ρ, extras)
 
     # Find optimal step size
-    B, G, XG = coeff.all, grad.all, res.main.all
-    mul!(XG, X, G)
-    C1 = dot(G, G)
-    C2 = dot(XG, XG)
-    t = C1 / (a²*C2 + b²*C1 + eps())
+    BLAS.gemm!('N', 'N', one(T), A, G, zero(T), AG)
+    normGsq = BLAS.dot(G, G)        # tr(G'G)
+    normAGsq = BLAS.dot(AG, AG)     # tr(A'G'GA)
+    if intercept
+        fill!(C, zero(T))
+        BLAS.ger!(one(T), Abar, g0, C)
+        BLAS.gemm!('T', 'N', one(T), C, G, zero(T), CtG)
+        trCtG = tr(CtG)                 # tr(x̄ g₀' G)
+        normg0sq = BLAS.dot(g0, g0)     # tr(g₀ g₀')
+        numerator = normGsq + normg0sq
+        denominator = alpha*normAGsq + beta*normGsq + normg0sq + 2*trCtG
+    else
+        numerator = normGsq
+        denominator = alpha*normAGsq + beta*normGsq
+    end
+    indeterminate = iszero(numerator) && iszero(denominator)
+    t = ifelse(indeterminate, zero(T), numerator / denominator)
 
     # Move in the direction of steepest descent.
-    axpy!(-t, G, B)
+    BLAS.axpy!(-t, G, coeff.slope)
+    intercept && BLAS.axpy!(-t, g0, coeff.intercept)
+end
+
+# Apply one update in distance penalized problem.
+function __mm_iterate__(::SD, problem::MVDAProblem, extras, epsilon, lambda, rho, k)
+    n , T = problem.n, floattype(problem)
+    alpha, beta = T(1/n), T(lambda+rho)
+    apply_projection(extras.projection, problem, k)
+    evaluate_residuals!(problem, extras, epsilon, true, true)
+    evaluate_gradient!(problem, lambda, rho)
+    __steepest_descent__(problem, extras, alpha, beta)
 
     return nothing
 end
 
-
 # Apply one update in regularized problem.
-function __reg_iterate__(::SD, problem, ϵ, λ, extras)
-    @unpack coeff, grad, res = problem
-    X = get_design_matrix(problem)
-    n, _, _ = probdims(problem)
-    a², b² = 1/n, λ
-
-    # Evaluate the gradient using residuals.
-    __evaluate_residuals__(problem, ϵ, extras, true, false, false)
-    __evaluate_reg_gradient__(problem, λ, extras)
-
-    # Find optimal step size
-    B, G, XG = coeff.all, grad.all, res.main.all
-    mul!(XG, X, G)
-    C1 = dot(G, G)
-    C2 = dot(XG, XG)
-    t = C1 / (a²*C2 + b²*C1 + eps())
-
-    # Move in the direction of steepest descent.
-    axpy!(-t, G, B)
+function __mm_iterate__(::SD, problem::MVDAProblem, extras, epsilon, lambda)
+    n , T = problem.n, floattype(problem)
+    alpha, beta = T(1/n), T(lambda)
+    evaluate_residuals!(problem, extras, epsilon, true, false)
+    evaluate_gradient!(problem, lambda)
+    __steepest_descent__(problem, extras, alpha, beta)
 
     return nothing
 end
