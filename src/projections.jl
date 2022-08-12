@@ -2,7 +2,10 @@
 Project `x` onto sparsity set with `k` non-zero elements.
 Assumes `idx` enters as a vector of indices into `x`.
 """
-function project_l0_ball!(x, idx, k, buffer)
+function project_l0_ball!(x::AbstractVector, k::Integer,
+    idx::T=collect(eachindex(x)),
+    buffer::T=similar(idx)) where T <: AbstractVector{<:Integer}
+    #
     n = length(x)
     # do nothing if k > length(x)
     if k ≥ n return x end
@@ -10,27 +13,10 @@ function project_l0_ball!(x, idx, k, buffer)
     # fill with zeros if k ≤ 0
     if k ≤ 0 return fill!(x, 0) end
     
-    # otherwise, find the spliting element
-    search_by_top_k = k < n-k+1
-    if search_by_top_k
-        _k = k
-        pivot = l0_search_partialsort!(idx, x, _k, true)
-    else
-        _k = n-k+1
-        pivot = l0_search_partialsort!(idx, x, _k, false)
-    end
-    
+    pivot = __search_by_partialsort__!(idx, x, k, true)
+
     # preserve the top k elements
-    p = abs(pivot)
-    nonzero_count = 0
-    @inbounds for i in eachindex(x)
-        if x[i] == 0 continue end
-        if abs(x[i]) < p
-            x[i] = 0
-        else
-            nonzero_count += 1
-        end
-    end
+    nonzero_count = __threshold__!(x, abs(pivot))
 
     # resolve ties
     if nonzero_count > k
@@ -38,7 +24,7 @@ function project_l0_ball!(x, idx, k, buffer)
         _buffer_ = view(buffer, 1:number_to_drop)
         _indexes_ = findall(!iszero, x)
         sample!(_indexes_, _buffer_, replace=false)
-        @inbounds for i in _buffer_
+        for i in _buffer_
             x[i] = 0
         end
     end
@@ -46,78 +32,12 @@ function project_l0_ball!(x, idx, k, buffer)
     return x
 end
 
-function project_l0_ball!(X::AbstractMatrix, idx, scores, k, buffer; by::Union{Val{:row}, Val{:col}}=Val(:row))
-    # determine structure of sparsity
-    if by isa Val{:row}
-        n = size(X, 1)
-        itr = axes(X, 1)
-        itr2 = eachrow(X)
-        f = i -> norm(view(X, i, :))
-    elseif by isa Val{:col}
-        n = size(X, 2)
-        itr = axes(X, 2)
-        itr2 = eachcol(X)
-        f = i -> norm(view(X, :, i))
-    else
-        error("uncrecognized option `by=$(by)`.")
-    end
-
-    # do nothing if k > length(x)
-    if k ≥ n return X end
-
-    # fill with zeros if k ≤ 0
-    if k ≤ 0 return fill!(X, 0) end
-
-    # otherwise, map rows to a score used in ranking and find the spliting element
-    map!(f, scores, itr)
-    search_by_top_k = k < n-k+1
-    if search_by_top_k
-        _k = k
-        pivot = l0_search_partialsort!(idx, scores, _k, true)
-    else
-        _k = n-k+1
-        pivot = l0_search_partialsort!(idx, scores, _k, false)
-    end
-
-    # preserve the top k elements
-    p = abs(pivot)
-    nonzero_count = 0
-    @inbounds for (i, xᵢ) in enumerate(itr2)
-        if scores[i] == 0 continue end
-
-        # row is not in the top k
-        if scores[i] < p
-            fill!(xᵢ, 0)
-            scores[i] = 0
-        else # row is in the top k
-            nonzero_count += 1
-        end
-    end
-
-    # resolve ties
-    if nonzero_count > k
-        number_to_drop = nonzero_count - k
-        _buffer_ = view(buffer, 1:number_to_drop)
-        _indexes_ = findall(!iszero, scores)
-        sample!(_indexes_, _buffer_, replace=false)
-        @inbounds for i in _buffer_
-            if by isa Val{:row}
-                fill!(view(X, i, :), 0)
-            elseif by isa Val{:col}
-                fill!(view(X, :, i), 0)
-            end
-        end
-    end
-
-    return X
-end
-
 """
 Search `x` for the pivot that splits the vector into the `k`-largest elements in magnitude.
 
 The search preserves signs and returns `x[k]` after partially sorting `x`.
 """
-function l0_search_partialsort!(idx, x, k, rev::Bool)
+function __search_by_partialsort__!(idx, x, k, rev::Bool)
     #
     # Based on https://github.com/JuliaLang/julia/blob/788b2c77c10c2160f4794a4d4b6b81a95a90940c/base/sort.jl#L863
     # This eliminates a mysterious allocation of ~48 bytes per call for
@@ -141,6 +61,19 @@ function l0_search_partialsort!(idx, x, k, rev::Bool)
     return x[idx[k]]
 end
 
+function __threshold__!(x, abs_pivot)
+    nonzero_count = 0
+    for i in eachindex(x)
+        if x[i] == 0 continue end
+        if abs(x[i]) < abs_pivot
+            x[i] = 0
+        else
+            nonzero_count += 1
+        end
+    end
+    return nonzero_count
+end
+
 struct L0Projection <: Function
     idx::Vector{Int}
     buffer::Vector{Int}
@@ -150,8 +83,30 @@ struct L0Projection <: Function
     end
 end
 
-function (P::L0Projection)(x, k)
-    project_l0_ball!(x, P.idx, k, P.buffer)
+(P::L0Projection)(x, k) = project_l0_ball!(x, k, P.idx, P.buffer)
+
+__iterateby__(::ObsDim.Constant{1}) = eachrow
+__iterateby__(::ObsDim.Constant{2}) = eachcol
+
+function project_l0_ball!(X::AbstractMatrix, k, args...;
+    obsdim::T=ObsDim.Constant{1}(),
+    rankby::F=Base.Fix2(norm, 2)) where {T,F}
+    #
+    iterateby = __iterateby__(convert(ObsDimension, obsdim))
+    project_l0_ball!(iterateby, rankby, X, k, args...)
+end
+
+function project_l0_ball!(itr::F1, f::F2, X::AbstractMatrix, k, scores::S, args...) where {F1,F2,S}
+    for (i, xi) in enumerate(itr(X))
+        scores[i] = f(xi)
+    end
+    project_l0_ball!(scores, k, args...)
+    for (score_i, x_i) in zip(scores, itr(X))
+        if score_i == 0
+            fill!(x_i, 0)
+        end
+    end
+    return X
 end
 
 struct StructuredL0Projection <: Function
@@ -164,6 +119,4 @@ struct StructuredL0Projection <: Function
     end
 end
 
-function (P::StructuredL0Projection)(X::AbstractMatrix, k)
-    project_l0_ball!(X, P.idx, P.scores, k, P.buffer, by=Val(:row))
-end
+(P::StructuredL0Projection)(X::AbstractMatrix, k) = project_l0_ball!(X, k, P.scores, P.idx, P.buffer; obsdim=ObsDim.Constant{1}())

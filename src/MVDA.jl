@@ -3,6 +3,7 @@ module MVDA
 # Dataset Management and I/O
 using DataFrames: copy, copyto!
 using CodecZlib, CSV, DataDeps, DataFrames, MLDataUtils, MLLabelUtils, Printf, ProgressMeter
+using MLDataUtils: ObsDimension
 
 # Math & Stats
 using Parameters
@@ -15,6 +16,7 @@ using Polyester
 import Base: show, iterate
 import MLDataUtils: classify, predict, ind2label, label2ind, isposlabel, isneglabel, islabelenc
 import MLLabelUtils: VectorLabelEncoding
+import StatsBase: fit, fit!
 
 ##### DATA #####
 
@@ -95,24 +97,35 @@ end
 
 include("encoding.jl")
 include("problem.jl")
-# include("utilities.jl")
-# include("projections.jl")
+include("utilities.jl")
+include("projections.jl")
+include("callbacks.jl")
 
-# abstract type AbstractMMAlg end
+abstract type AbstractMMAlg end
 
 # include(joinpath("algorithms", "SD.jl"))
-# include(joinpath("algorithms", "MMSVD.jl"))
+include(joinpath("algorithms", "MMSVD.jl"))
 # include(joinpath("algorithms", "CyclicVDA.jl"))
 
-# const DEFAULT_ANNEALING = geometric_progression
-# const DEFAULT_CALLBACK = __do_nothing_callback__
-# const DEFAULT_SCORE_FUNCTION = prediction_error
+const DEFAULT_MAXITER = 10^3
+const DEFAULT_MAXRHOV = 10^2
+const DEFAULT_RHO_INIT = 1.0
+const DEFAULT_RHO_MAX = 1e8
+const DEFAULT_ANNEALING = geometric_progression(1.2) # rho_0 * 1.2^t
+const DEFAULT_NESTEROV = 10
+const DEFAULT_CALLBACK = __do_nothing_callback__
+# const DEFAULT_SCORE_FUNCTION = prediction_errors
 
-# include("fit.jl")
+const DEFAULT_GTOL = 1e-3
+const DEFAULT_DTOL = 1e-3
+const DEFAULT_RTOL = 1e-6
+
+include("fit.jl")
 # include("cv.jl")
 
 # export IterationResult, SubproblemResult
 # export MVDAProblem, SD, MMSVD # CyclicVDA
 export MVDAProblem, probdims, maximum_deadzone
+export MMSVD
 
 end

@@ -1,14 +1,64 @@
 """
-    fit(algorithm, problem, ϵ, s; kwargs...)
+```init!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
 
-Solve optimization problem at sparsity level `s` using a deadzone of size `ϵ`.
-
-The solution is obtained via a proximal distance `algorithm` that gradually anneals parameter estimates
-toward the target sparsity set.
+Initialize a `problem` with its `λ`-regularized solution.
 """
-function fit(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real; kwargs...)
-    extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
-    MVDA.fit!(algorithm, problem, ϵ, s, extras, (true,false,); kwargs...)
+function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda, _extras_::T=nothing;
+    maxiter::Int=DEFAULT_MAXITER,
+    gtol::Real=DEFAULT_GTOL,
+    nesterov::Int=DEFAULT_NESTEROV,
+    callback::F=DEFAULT_CALLBACK,
+    kwargs...,
+    ) where {T,F}
+    # Check for missing data structures.
+    extras = __mm_init__(algorithm, problem, _extras_)
+
+    # Get problem info and extra data structures.
+    @unpack coeff, coeff_prev, coeff_proj = problem
+
+    # Fix hyperparameters.
+    hyperparams = (;epsilon=epsilon, lambda=lambda, rho=zero(lambda), k=size(coeff.slope, 1))
+
+    # Update data structures due to hyperparameters.
+    __mm_update_lambda__(algorithm, problem, extras, lambda, zero(lambda))
+
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    state = evaluate_objective!(problem, extras, epsilon, lambda)
+    callback((0, state), problem, hyperparams)
+    old = state.objective
+
+    if state.gradient < gtol
+        return (0, state)
+    end
+
+    # Initialize iteration counts.
+    iters = 0
+    nesterov_iter = 1
+
+    for iter in 1:maxiter
+        iters += 1
+
+        # Apply an algorithm map to update estimates.
+        __mm_iterate__(algorithm, problem, extras, epsilon, lambda)
+
+        # Update loss, objective, and gradient.
+        state = evaluate_objective!(problem, extras, epsilon, lambda)
+        callback((iter, state), problem, hyperparams)
+
+        # Assess convergence.
+        obj = state.objective
+        if state.gradient < gtol
+            break
+        elseif iter < maxiter
+            needs_reset = iter < nesterov || obj > old
+            nesterov_iter = nesterov_acceleration!(coeff, coeff_prev, nesterov_iter, needs_reset)
+            old = obj
+        end
+    end
+    copyto!(coeff_proj.slope, coeff.slope)
+    copyto!(coeff_proj.intercept, coeff.intercept)
+
+    return (iters, state)
 end
 
 """
@@ -37,56 +87,51 @@ Same as `fit_MVDA(algorithm, problem, ϵ, s)`, but with preallocated data struct
 
 See also: [`MVDA.anneal!`](@ref) for additional keyword arguments applied at the annealing step.
 """
-function fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real,
-    extras=nothing,
-    update_extras::NTuple{2,Bool}=(true,false,);
-    nouter::Int=100,
-    dtol::Real=1e-6,
-    rtol::Real=1e-6,
-    rho_init::Real=1.0,
-    rho_max::Real=1e8,
+function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real,
+    _extras_::T=nothing;
+    maxrhov::Int=DEFAULT_MAXRHOV,
+    dtol::Real=DEFAULT_DTOL,
+    rtol::Real=DEFAULT_RTOL,
+    rho_init::Real=DEFAULT_RHO_INIT,
+    rho_max::Real=DEFAULT_RHO_MAX,
     rhof::Function=DEFAULT_ANNEALING,
-    verbose::Bool=false,
-    cb::Function=DEFAULT_CALLBACK,
-    kwargs...)
+    callback::F=DEFAULT_CALLBACK,
+    kwargs...) where{T,F}
     # Check for missing data structures.
-    if extras isa Nothing
-        error("Detected missing data structures for algorithm $(algorithm).")
-    end
+    extras = __mm_init__(algorithm, problem, _extras_)
 
     # Get problem info and extra data structures.
-    @unpack intercept, coeff, coeff_prev, proj = problem
+    @unpack coeff, coeff_prev, coeff_proj = problem
     @unpack projection = extras
-    
-    # Fix model size(s).
-    k = sparsity_to_k(problem, s)
 
     # Initialize ρ and iteration count.
-    ρ, iters = rho_init, 0
+    rho, iters = rho_init, 0
 
+    # Fix hyperparameters.
+    k = sparsity_to_k(problem, s)
+    hyperparams = (;epsilon=epsilon, lambda=lambda, rho=rho, k=k)
+    
     # Update data structures due to hyperparameters.
-    update_extras[1] && __mm_update_sparsity__(algorithm, problem, ϵ, ρ, k, extras)
-    update_extras[2] && __mm_update_rho__(algorithm, problem, ϵ, ρ, k, extras)
+    __mm_update_rho__(algorithm, problem, extras, lambda, rho)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    init_result = __evaluate_objective__(problem, ϵ, ρ, extras)
-    result = SubproblemResult(0, init_result)
-    cb(0, problem, ϵ, ρ, k, result)
-    old = sqrt(result.distance)
+    state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+    callback((0, state), problem, hyperparams)
+    old = state.distance
 
-    for iter in 1:nouter
+    for iter in 1:maxrhov
         # Solve minimization problem for fixed rho.
-        verbose && print("\n",iter,"  ρ = ",ρ)
-        result = MVDA.anneal!(algorithm, problem, ϵ, ρ, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
+        (inner_iters, state) = anneal!(algorithm, problem, epsilon, lambda, s, rho, extras;
+            callback=callback,
+            kwargs...,
+        )
 
         # Update total iteration count.
-        iters += result.iters
-
-        cb(iter, problem, ϵ, ρ, k, result)
+        iters += inner_iters
 
         # Check for convergence to constrained solution.
-        dist = sqrt(result.distance)
+        dist = state.distance
         if dist < dtol || abs(dist - old) < rtol * (1 + old)
             break
         else
@@ -94,32 +139,14 @@ function fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, s::Real,
         end
                 
         # Update according to annealing schedule.
-        ρ = ifelse(iter < nouter, rhof(ρ, iter, rho_max), ρ)
+        rho = ifelse(iter < maxrhov, rhof(rho, iter, rho_max), rho)
     end
     
     # Project solution to the constraint set.
     apply_projection(projection, problem, k)
-    loss, obj, dist, gradsq = __evaluate_objective__(problem, ϵ, ρ, extras)
+    state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
 
-    if verbose
-        print("\n\niters = ", iters)
-        print("\n∑ᵢ max{0, |yᵢ-Bᵀxᵢ|₂-ϵ}² = ", loss)
-        print("\nobjective  = ", obj)
-        print("\ndistance   = ", sqrt(dist))
-        println("\n|gradient| = ", sqrt(gradsq))
-    end
-
-    return SubproblemResult(iters, loss, obj, dist, gradsq)
-end
-
-"""
-    anneal(algorithm, problem, ϵ, ρ, s; kwargs...)
-
-Solve the `ρ`-penalized optimization problem at sparsity level `s` with deadzone `ϵ`.
-"""
-function anneal(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::Real, s::Real; kwargs...)
-    extras = __mm_init__(algorithm, problem, nothing)
-    MVDA.anneal!(algorithm, problem, ϵ, ρ, s, extras, (true,true,); kwargs...)
+    return (iters, state)
 end
 
 """
@@ -143,145 +170,63 @@ Same as `anneal(algorithm, problem, ϵ, ρ, s)`, but with preallocated data stru
 - `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 """
-function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ::Real, ρ::Real, s::Real,
-    extras=nothing,
-    update_extras::NTuple{2,Bool}=(true,true);
-    ninner::Int=10^4,
+function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real, rho::Real,
+    _extras_::T=nothing;
+    maxiter::Int=10^4,
     gtol::Real=1e-6,
-    nesterov_threshold::Int=10,
-    verbose::Bool=false,
-    cb::Function=DEFAULT_CALLBACK,
-    kwargs...
-    )
-    # Check for missing data structures.
-    if extras isa Nothing
-        error("Detected missing data structures for algorithm $(algorithm).")
-    end
-
-    # Get problem info and extra data structures.
-    @unpack intercept, coeff, coeff_prev, proj = problem
-    @unpack projection = extras
-
-    # Fix model size(s).
-    k = sparsity_to_k(problem, s)
-
-    # Update data structures due to hyperparameters.
-    update_extras[1] && __mm_update_sparsity__(algorithm, problem, ϵ, ρ, k, extras)
-    update_extras[2] && __mm_update_rho__(algorithm, problem, ϵ, ρ, k, extras)
-
-    # Check initial values for loss, objective, distance, and norm of gradient.
-    apply_projection(projection, problem, k)
-    result = __evaluate_objective__(problem, ϵ, ρ, extras)
-    cb(0, problem, ϵ, ρ, k, result)
-    old = result.objective
-
-    if sqrt(result.gradient) < gtol
-        return SubproblemResult(0, result)
-    end
-
-    # Use previous estimates in case of warm start.
-    copyto!(coeff.all, coeff_prev.all)
-
-    # Initialize iteration counts.
-    iters = 0
-    nesterov_iter = 1
-    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|")
-    for iter in 1:ninner
-        iters += 1
-
-        # Apply the algorithm map to minimize the quadratic surrogate.
-        __mm_iterate__(algorithm, problem, ϵ, ρ, k, extras)
-
-        # Update loss, objective, distance, and gradient.
-        apply_projection(projection, problem, k)
-        result = __evaluate_objective__(problem, ϵ, ρ, extras)
-
-        cb(iter, problem, ϵ, ρ, k, result)
-
-        if verbose
-            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.distance), sqrt(result.gradient))
-        end
-
-        # Assess convergence.
-        obj = result.objective
-        gradsq = sqrt(result.gradient)
-        if gradsq < gtol
-            break
-        elseif iter < ninner
-            needs_reset = iter < nesterov_threshold || obj > old
-            nesterov_iter = __apply_nesterov__!(coeff.all, coeff_prev.all, nesterov_iter, needs_reset)
-            old = obj
-        end
-    end
-    # Save parameter estimates in case of warm start.
-    copyto!(coeff_prev.all, coeff.all)
-
-    return SubproblemResult(iters, result)
-end
-
-"""
-```init!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
-
-Initialize a `problem` with its `λ`-regularized solution.
-"""
-function init!(algorithm::AbstractMMAlg, problem::MVDAProblem, ϵ, λ, _extras_=nothing;
-    maxiter::Int=10^3,
-    gtol::Real=1e-6,
-    nesterov_threshold::Int=10,
-    verbose::Bool=false,
-    )
+    nesterov::Int=10,
+    callback::F=DEFAULT_CALLBACK,
+    ) where {T,F}
     # Check for missing data structures.
     extras = __mm_init__(algorithm, problem, _extras_)
 
     # Get problem info and extra data structures.
-    @unpack coeff, coeff_prev, proj = problem
+    @unpack coeff, coeff_prev, coeff_proj = problem
+    @unpack projection = extras
+
+    # Fix hyperparameters.
+    k = sparsity_to_k(problem, s)
+    hyperparams = (;epsilon=epsilon, lambda=lambda, rho=rho, k=k)
 
     # Update data structures due to hyperparameters.
-    __mm_update_lambda__(algorithm, problem, ϵ, λ, extras)
-
-    # Initialize coefficients.
-    randn!(coeff.all)
-    copyto!(coeff_prev.all, coeff.all)
+    __mm_update_rho__(algorithm, problem, extras, lambda, rho)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    result = __evaluate_reg_objective__(problem, ϵ, λ, extras)
-    old = result.objective
+    apply_projection(projection, problem, k)
+    state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+    old = state.objective
 
-    if sqrt(result.gradient) < gtol
-        return SubproblemResult(0, result)
+    if state.gradient < gtol
+        return (0, state)
     end
 
     # Initialize iteration counts.
     iters = 0
     nesterov_iter = 1
-    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "|gradient|")
     for iter in 1:maxiter
         iters += 1
 
-        # Apply the algorithm map to minimize the quadratic surrogate.
-        __reg_iterate__(algorithm, problem, ϵ, λ, extras)
+        # Apply an algorithm map to update estimates.
+        __mm_iterate__(algorithm, problem, extras, epsilon, lambda, rho, k)
 
-        # Update loss, objective, and gradient.
-        result = __evaluate_reg_objective__(problem, ϵ, λ, extras)
-
-        if verbose
-            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.gradient))
-        end
+        # Update loss, objective, distance, and gradient.
+        apply_projection(projection, problem, k)
+        state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+        callback((iter, state), problem, hyperparams)
 
         # Assess convergence.
-        obj = result.objective
-        gradsq = sqrt(result.gradient)
-        if gradsq < gtol
+        obj = state.objective
+        if state.gradient < gtol
             break
         elseif iter < maxiter
-            needs_reset = iter < nesterov_threshold || obj > old
-            nesterov_iter = __apply_nesterov__!(coeff.all, coeff_prev.all, nesterov_iter, needs_reset)
+            needs_reset = iter < nesterov || obj > old
+            nesterov_iter = nesterov_acceleration!(coeff, coeff_prev, nesterov_iter, needs_reset)
             old = obj
         end
     end
     # Save parameter estimates in case of warm start.
-    copyto!(coeff_prev.all, coeff.all)
-    copyto!(proj.all, coeff.all)
+    copyto!(coeff_prev.slope, coeff.slope)
+    copyto!(coeff_prev.intercept, coeff.intercept)
 
-    return SubproblemResult(iters, result)
+    return (iters, state)
 end

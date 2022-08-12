@@ -1,108 +1,172 @@
 """
-Solve the least squares problem using a SVD of the design matrix.
+Solve via a sequence of linear system solves. Uses SVD of design matrix.
 """
 struct MMSVD <: AbstractMMAlg end
 
 # Initialize data structures.
 function __mm_init__(::MMSVD, problem::MVDAProblem, ::Nothing)
     @unpack coeff = problem
-    X = get_design_matrix(problem)
+    A = design_matrix(problem)
     n, p, c = probdims(problem)
     T = floattype(problem)
     nparams = ifelse(problem.kernel isa Nothing, p, n)
 
-    # thin SVD of X
-    U, s, V = __svd_wrapper__(X)
-    r = length(s) # number of nonzero singular values
+    # projection
+    projection = StructuredL0Projection(nparams)
 
-    # worker arrays
-    Z = Matrix{T}(undef, n, c-1)
-    buffer = Matrix{T}(undef, r, c-1)
+    # thin SVD of A
+    F = svd(A, full=false)
+    r = length(F.S)
+
+    # constants
+    Abar = vec(mean(A, dims=1))
     
-    # diagonal matrices
-    Ψ = Diagonal(Vector{T}(undef, r))
+    # worker arrays
+    Z = fill!(similar(A, n, c-1), zero(T))
+    buffer = fill!(similar(A, r, c-1), zero(T))
+    Psi = Diagonal(fill!(similar(A, r), 0))
     
     return (;
-        projection=StructuredL0Projection(nparams),
-        U=U, s=s, V=V,
-        Z=Z, Ψ=Ψ,
-        buffer=buffer,
+        projection=projection,
+        U=F.U, s=F.S, V=Matrix(F.V),
+        Abar=Abar, Z=Z, buffer=buffer, Psi=Psi,
     )
 end
 
-# Check for data structure allocations; otherwise initialize.
-function __mm_init__(::MMSVD, problem::MVDAProblem, extras)
-    if :projection in keys(extras) && :buffer in keys(extras) # TODO
-        return extras
-    else
-        __mm_init__(MMSVD(), problem, nothing)
-    end
-end
-
-# Update data structures due to change in model size, k.
-__mm_update_sparsity__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras) = nothing
+# Assume extras has the correct data structures.
+__mm_init__(::MMSVD, problem::MVDAProblem, extras) = extras
 
 # Update data structures due to changing ρ.
-__mm_update_rho__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras) = update_diagonal(problem, ρ, extras)
+__mm_update_rho__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem.n, lambda, rho)
 
 # Update data structures due to changing λ. 
-__mm_update_lambda__(::MMSVD, problem::MVDAProblem, ϵ, λ, extras) = update_diagonal(problem, λ, extras)
+__mm_update_lambda__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem.n, lambda, rho)
 
-function update_diagonal(problem::MVDAProblem, λ, extras)
-    @unpack s, Ψ = extras
-    n, _, _ = probdims(problem)
-    a², b² = 1/n, λ
+function update_diagonal(extras, n, lambda, rho)
+    @unpack s, Psi = extras
+    alpha, beta = 1/n, lambda+rho
+    for i in eachindex(Psi.diag)
+        s2 = s[i]^2
+        Psi.diag[i] = alpha*s2 / (alpha*s2 + beta)
+    end
+    return nothing
+end
 
-    # Update the diagonal matrices Ψ = (a² Σ²) / (a² Σ² + b² I).
-    for i in eachindex(Ψ.diag)
-        sᵢ² = s[i]^2
-        Ψ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
+# Solves H*B = C, where H = (γ*A'A + β*I), using thin SVD of A.
+# The SVD makes it so that H⁻¹ = β⁻¹ * [I - V Ψ Vᵀ] and γ is absorved in Psi.
+function __apply_H_inverse__!(B, H, C, buffer, alpha::Real=zero(eltype(B)))
+    beta, V, Psi = H
+    if iszero(alpha)    # compute B = H⁻¹ C
+        copyto!(B, C)
+        BLAS.scal!(1/beta, B)
+        alpha = one(beta)
+    else                # compute B = B + α * H⁻¹ C
+        BLAS.axpy!(alpha/beta, C, B)
+    end
+
+    # accumulate Ψ * Vᵀ * C
+    BLAS.gemm!('T', 'N', one(beta), V, C, zero(beta), buffer)
+    lmul!(Psi, buffer)
+
+    # complete the product with a 5-arg mul
+    BLAS.gemm!('N', 'N', -alpha/beta, V, buffer, one(beta), B)
+
+    return nothing
+end
+
+function __H_inverse_quadratic_form__(H, x, buffer)
+    beta, V, Psi = H
+    T = eltype(buffer)
+    BLAS.gemv!('T', one(T), V, x, zero(T), buffer)
+    for i in eachindex(buffer)
+        buffer[i] = sqrt(Psi.diag[i]) * buffer[i]
+    end
+
+    return 1/beta * (BLAS.dot(x, x) - BLAS.dot(buffer, buffer))
+end
+
+#
+#   NOTE: worker arrays must not be aliased with parameters (B, b0)!!!
+#
+function __linear_solve_SVD__(LHS_and_RHS::Function, problem::MVDAProblem, extras)
+    @unpack coeff, intercept = problem
+    @unpack Abar, Z, buffer = extras
+
+    B, b0 = coeff.slope, coeff.intercept
+    T = floattype(problem)    
+    H, C = LHS_and_RHS(problem, extras)
+
+    # 1. Solve H*B = RHS.
+    __apply_H_inverse__!(B, H, C, buffer, zero(T))
+
+    # Apply Schur complement in H to compute intercept and shift coefficients.
+    if intercept
+        # 2. Compute Schur complement, s = 1 - x̄ᵀH⁻¹x̄
+        s = 1 - __H_inverse_quadratic_form__(H, Abar, view(buffer, :, 1))
+
+        # 3. Compute new intercept, b₀ = s⁻¹[z̄ - Bᵀx̄]
+        mean!(b0, Z')
+        BLAS.gemv!('T', -T(1/s), B, Abar, T(1/s), b0)
+
+        # 4. Compute new slopes, B = B - H⁻¹(x̄*b₀ᵀ)
+        fill!(C, zero(T))
+        BLAS.ger!(one(T), Abar, b0, C)
+        __apply_H_inverse__!(B, H, C, buffer, -one(T))
     end
 
     return nothing
 end
 
 # Apply one update.
-function __mm_iterate__(::MMSVD, problem::MVDAProblem, ϵ, ρ, k, extras)
-    @unpack intercept, coeff, proj = problem
-    @unpack buffer, projection = extras
-    @unpack Z, Ψ, U, s, V = extras
-    Σ = Diagonal(s)
+function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, epsilon, lambda, rho, k)
+    n = problem.n
     T = floattype(problem)
+    c1, c2, c3 = T(1/n), T(lambda), T(rho)
+    
+    f = let c1=c1, c2=c2, c3=c3
+        function(problem, extras)
+            A = design_matrix(problem)
 
-    # need to compute Z via residuals...
-    apply_projection(projection, problem, k)
-    __evaluate_residuals__(problem, ϵ, extras, true, false, true)
+            # LHS: H = γ*A'A + β*I; pass as (β, V, Ψ) which computes H⁻¹ = β⁻¹[I - V Ψ Vᵀ]
+            H = (c2+c3, extras.V, extras.Psi)
 
-    # Update parameters:B = P + V * Ψ * (Σ⁻¹UᵀZ - VᵀP) 
-    B = coeff.all
-    P = proj.all
-    mul!(buffer, U', Z)
-    ldiv!(Σ, buffer)
-    mul!(buffer, V', P, -one(T), one(T))
-    lmul!(Ψ, buffer)
-    mul!(B, V, buffer)
-    axpy!(one(T), P, B)
+            # RHS: C = 1/n*AᵀZₘ + ρ*P(wₘ)
+            C = problem.coeff_proj.slope
+            BLAS.gemm!('T', 'N', c1, A, extras.Z, c3, C)
+
+            return H, C
+        end
+    end
+
+    apply_projection(extras.projection, problem, k)
+    evaluate_residuals!(problem, extras, epsilon, true, false)
+    __linear_solve_SVD__(f, problem, extras)
 
     return nothing
 end
 
-# Apply one update in reguarlized problem.
-function __reg_iterate__(::MMSVD, problem::MVDAProblem, ϵ, λ, extras)
-    @unpack intercept, coeff = problem
-    @unpack buffer = extras
-    @unpack Z, Ψ, U, s, V = extras
-    Σ = Diagonal(s)
+# Apply one update in regularized problem.
+function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, epsilon, lambda)
+    n = problem.n
+    T = floattype(problem)
+    c1, c2 = T(1/n), T(lambda)
+    
+    f = let c1=c1, c2=c2
+        function(problem, extras)
+            A = design_matrix(problem)
 
-    # need to compute Z via residuals...
-    __evaluate_residuals__(problem, ϵ, extras, true, false, true)
+            # LHS: H = γ*A'A + β*I; pass as (β, V, Ψ) which computes H⁻¹ = β⁻¹[I - V Ψ Vᵀ]
+            H = (c2, extras.V, extras.Psi)
 
-    # Update parameters: B = V * Ψ * Σ⁻¹ * Uᵀ * Z
-    B = coeff.all
-    mul!(buffer, U', Z)
-    ldiv!(Σ, buffer)
-    lmul!(Ψ, buffer)
-    mul!(B, V, buffer)
+            # RHS: C = 1/n*AᵀZₘ
+            C = problem.coeff_proj.slope
+            BLAS.gemm!('T', 'N', c1, A, extras.Z, zero(T), C)
+            return H, C
+        end
+    end
+
+    evaluate_residuals!(problem, extras, epsilon, true, false)
+    __linear_solve_SVD__(f, problem, extras)
 
     return nothing
 end
