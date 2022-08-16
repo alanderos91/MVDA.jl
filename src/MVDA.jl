@@ -2,6 +2,7 @@ module MVDA
 
 # Dataset Management and I/O
 using DataFrames: copy, copyto!
+using DelimitedFiles
 using CodecZlib, CSV, DataDeps, DataFrames, MLDataUtils, MLLabelUtils, Printf, ProgressMeter
 using MLDataUtils: ObsDimension
 
@@ -97,6 +98,7 @@ end
 
 include("encoding.jl")
 include("problem.jl")
+include("transform.jl")
 include("utilities.jl")
 include("projections.jl")
 include("callbacks.jl")
@@ -114,17 +116,15 @@ const DEFAULT_RHO_MAX = 1e8
 const DEFAULT_ANNEALING = geometric_progression(1.2) # rho_0 * 1.2^t
 const DEFAULT_NESTEROV = 10
 const DEFAULT_CALLBACK = __do_nothing_callback__
-# const DEFAULT_SCORE_FUNCTION = prediction_errors
+const DEFAULT_SCORE_FUNCTION = prediction_accuracies
 
 const DEFAULT_GTOL = 1e-3
 const DEFAULT_DTOL = 1e-3
 const DEFAULT_RTOL = 1e-6
 
 include("fit.jl")
-# include("cv.jl")
+include("cv.jl")
 
-# export IterationResult, SubproblemResult
-# export MVDAProblem, SD, MMSVD # CyclicVDA
 export MVDAProblem, probdims, maximum_deadzone
 export MMSVD, SD
 

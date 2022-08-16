@@ -170,9 +170,29 @@ results consistent with the input model.
 MVDAProblem(data_L, data_X, old::MVDAProblem) = MVDAProblem{floattype(old)}(data_L, data_X, old.encoding, old.kernel, old.labels, old.intercept)
 
 """
+    MVDAProblem(labels, data, old::MVDAProblem, kernel::Kernel)
+
+Create a new `MVDAProblem` using a different kernel but with the settings of the `old` one.
+
+Specifically, the new problem with use the same encoding and label set to keep `classify`
+results consistent with the input model.
+"""
+MVDAProblem(data_L, data_X, old::MVDAProblem, kernel::Kernel) = MVDAProblem{floattype(old)}(data_L, data_X, old.encoding, kernel, old.labels, old.intercept)
+
+"""
 Return the floating-point type used for model coefficients.
 """
 floattype(::MVDAProblem{T}) where T = T
+
+"""
+Map vertex labels back to the original label space.
+"""
+function original_labels(problem::MVDAProblem)
+    @unpack Y, encoding, labels = problem
+    idx = map(Base.Fix2(label2ind, encoding), eachrow(Y))
+    L = map(Base.Fix1(getindex, labels), idx)
+    return L
+end
 
 """
 Return the design matrix used for fitting a classifier.
@@ -326,4 +346,96 @@ function __classify__(problem::MVDAProblem, Y::AbstractMatrix)
     end
 
     return L
+end
+
+function confusion_matrix(problem::MVDAProblem, data::Tuple{LT,XT}) where {LT,XT}
+    @unpack c, labels = problem
+    L, X = data
+    Lhat = classify(problem, X)
+    d = Dict(label => i for (i, label) in enumerate(labels))
+    C = zeros(c, c)
+    for (lhat, l) in zip(Lhat, L)
+        # rows: true, cols: predicted
+        i, j = d[l], d[lhat]
+        C[i,j] += 1
+    end
+    return (C, d)
+end
+
+function prediction_probabilities(problem::MVDAProblem, data::Tuple{LT,XT}) where {LT,XT}
+    C, d = confusion_matrix(problem, data)
+    S = sum(C, dims=1)
+    return (C ./ S, d)
+end
+
+function confusion_matrix(problem::MVDAProblem, coeff0::AbstractMatrix)
+    coeff = problem.coeff_proj.slope
+    C = zeros(2, 2)
+    for i in axes(coeff0, 1)
+        xi = norm(view(coeff, i, :))
+        yi = norm(view(coeff0, i, :))
+        C[1,1] += (xi != 0) && (yi != 0) # TP
+        C[2,1] += (xi != 0) && (yi == 0) # FP
+        C[2,1] += (xi == 0) && (yi != 0) # FN
+        C[2,2] += (xi == 0) && (yi == 0) # TN
+    end
+    return C
+end
+
+confusion_matrix(problem::MVDAProblem, coeff0::Coefficients) = confusion_matrix(problem, coeff0.slope)
+
+function accuracy(problem::MVDAProblem, data::Tuple{LT,XT}) where {LT,XT}
+    L, X = data
+
+    # Sanity check: Y and X have the same number of rows.
+    length(L) != size(X, 1) && error("Labels ($(length(L))) not compatible with data X ($(size(X))).")
+
+    Lhat = classify(problem, X)
+
+    # Sweep through predictions and tally the mistakes.
+    ncorrect = 0
+    for i in eachindex(L)
+        ncorrect += (Lhat[i] == L[i])
+    end
+
+    return ncorrect / length(L)
+end
+
+function save_model(filename::AbstractString, problem::MVDAProblem)
+    @unpack coeff, coeff_proj = problem
+    writedlm(filename*"_coeff.slope", coeff.slope, '\t')
+    writedlm(filename*"_coeff.intercept", coeff.intercept, '\t')
+    writedlm(filename*"_coeff_proj.slope", coeff.slope, '\t')
+    writedlm(filename*"_coeff_proj.intercept", coeff.intercept, '\t')
+    return nothing
+end
+
+function load_model(filename::AbstractString)
+    return (;
+        coeff=(;
+            slope=readdlm(filename*"_coeff.slope"),
+            intercept=readdlm(filename*"_coeff.intercept"),
+        ),
+        coeff_proj=(;
+            slope=readdlm(filename*"_coeff_proj.slope"),
+            intercept=readdlm(filename*"_coeff_proj.intercept"),
+        ),
+    )
+end
+
+function count_active_variables(problem::MVDAProblem)
+    has_nonzero_norm(x) = !isequal(norm(x), 0)
+    coeff = problem.coeff_proj.slope
+    count(has_nonzero_norm, eachrow(coeff))
+end
+
+function active_variables(problem::MVDAProblem)
+    coeff = problem.coeff_proj.slope
+    idx = Int[]
+    for (i, x) in enumerate(eachrow(coeff))
+        if norm(x) != 0
+            push!(idx, i)
+        end
+    end
+    return idx
 end
