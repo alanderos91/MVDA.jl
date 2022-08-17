@@ -70,11 +70,11 @@ See: https://archive.ics.uci.edu/ml/datasets/Letter+Recognition
 
 ## Dataset: lymphography
 
-**4 classes / 148 instances / 18 variables**
+**4 classes / 148 instances / 50 variables**
 
 See: https://archive.ics.uci.edu/ml/datasets/Lymphography
 
-The original 18 features have been expanded to 
+The original 18 categorical variables are coded as 50 binary variables.
 
 ## Dataset: optdigits
 
@@ -102,18 +102,20 @@ Bayes error is expected to be ≈0.1 due to random class inversions.
 
 ## Dataset: splice
 
-**3 classes / 3176 instances (14 dropped) / 180 variables**
+**3 classes / 3176 instances (14 dropped) / 240 variables**
 
 See: https://archive.ics.uci.edu/ml/datasets/Molecular+Biology+(Splice-junction+Gene+Sequences)
 
-The original sequence of 60 nucleotides is expanded to 180 variables using the binary encoding
+The original sequences of 60 nucleotides are expanded to 240 variables using the binary encoding
 
-    T ==> [0,0,0]
-    G ==> [0,0,1]
-    C ==> [0,1,0]
-    A ==> [1,0,0]
+    T ==> [0,0,0,1]
+    G ==> [0,0,1,0]
+    C ==> [0,1,0,0]
+    A ==> [1,0,0,0]
 
-14 instances with ambiguous sequences are dropped.
+14 instances with ambiguous sequences are dropped. Although representable with 3 bits, the 4 bit
+version allows us to determine whether a site is important; e.g. does [0,0,0] mean T or not
+important in the 3 bit version? 
 
 ## Dataset: synthetic
 
