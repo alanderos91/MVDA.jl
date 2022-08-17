@@ -222,3 +222,61 @@ The result is guaranteed to have type `typeof(rho)`.
 function geometric_progression(multiplier::Real=1.2)
     return GeometricProression(multiplier)
 end
+
+function make_sparsity_grid(n, nbins, len=round(Int, 1e1 ^ (log10(n)-1)))
+    function sumr(r, K)
+        if r != 1
+            Float64(r/(r-1) * (r^K - 1))
+        else
+            Float64(K)
+        end
+    end
+
+    xs = Float64[]
+    push!(xs, 0.0)
+
+    if n > 100
+        c = fzero(c -> (1-c^(nbins+1))/(1-c) - 2, 0.0, 1-eps())
+        r = fzero(r -> sumr(r, nbins) - len, 0.0, Float64(n))
+        N = zeros(Int, nbins)
+        for k in 1:nbins-1
+            N[k] = max(1, floor(Int, r^k))
+        end
+        N[end] = max(sum(N)-len, len-sum(N))
+        for (k, nk) in enumerate(N)
+            a = xs[end]
+            b = xs[end] + c^k
+            vals = range(a, b, length=nk+1)
+            foreach(Base.Fix1(push!, xs), vals[2:end])
+        end
+    else
+        for i in 0:n-1
+            push!(xs, i/n)
+        end
+    end
+    ys = unique!(round.(Int, (1 .- xs) .* n))
+    xs = sort!(1 .- ys ./ n)
+    filter!(!isequal(1.0), xs)
+    return xs
+end
+
+function make_regular_log10_grid(a, b, m)
+    xs = Float64[]
+    
+    for c in a:b-1
+        r = range(c, c+1, length=m)
+        for ri in r
+            push!(xs, 10.0 ^ ri)
+        end
+    end
+
+    return unique!(xs)
+end
+
+function make_log10_grid(a, b, n)
+    if a == -Inf
+        [0.0; 10.0 .^ range(log10(eps()), b, length=n-1)]
+    else
+        10.0 .^ range(a, b, length=n)
+    end
+end
