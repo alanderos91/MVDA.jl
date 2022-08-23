@@ -18,12 +18,6 @@ function process_vowel(local_path, dataset)
         variable_indices=3:ncol(df),
         ext=".csv",
     )
-        
-    # Store column information.
-    info_file = joinpath(dir, "$(dataset).info")
-    column_info = [["digit"]; ["$(i)x$(j)" for i in 1:8 for j in 1:8]]
-    column_info_df = DataFrame(columns=column_info)
-    CSV.write(info_file, column_info_df; writeheader=false, delim=',')
 
     # Clean up by removing separate training and testing files.
     rm(tra)
