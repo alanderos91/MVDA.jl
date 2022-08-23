@@ -58,7 +58,7 @@ function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon,
     copyto!(coeff_proj.slope, coeff.slope)
     copyto!(coeff_proj.intercept, coeff.intercept)
 
-    return (iters, state)
+    return ((iters, state), zero(lambda))
 end
 
 """
@@ -146,7 +146,7 @@ function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon:
     apply_projection(projection, problem, k)
     state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
 
-    return (iters, state)
+    return ((iters, state), rho)
 end
 
 """

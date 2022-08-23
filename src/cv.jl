@@ -88,6 +88,7 @@ function cv(
     show_progress::Bool=true,
     progress_bar::Progress=Progress(nfolds * length(grids[1]) * length(grids[2]); desc="Running CV w/ $(algorithm)... ", enabled=show_progress),
     data_transform::Type{T}=ZScoreTransform,
+    rho_init=DEFAULT_RHO_INIT,
     kwargs...,
     ) where {C,D,G,S,T}
     # Sanity checks.
@@ -139,6 +140,9 @@ function cv(
             for coeff_nt in param_sets
                 foreach(Base.Fix2(fill!, 0), coeff_nt)
             end
+
+            # Set initial value for rho.
+            rho = rho_init
             
             for (i, s) in enumerate(s_grid)
                 # Fit model.
@@ -148,7 +152,7 @@ function cv(
                     )
                 else
                     timed_result = @timed MVDA.fit!(
-                        algorithm, train_problem, epsilon, lambda, s, extras; kwargs...
+                        algorithm, train_problem, epsilon, lambda, s, extras; rho_init=rho, kwargs...
                     )
                 end
                 
@@ -156,8 +160,11 @@ function cv(
                 indices = (;sparsity=i, lambda=j, fold=k,)
                 measured_time = timed_result.time # seconds
                 result.time[i,j,k] = measured_time
-                statistics = timed_result.value
+                statistics, new_rho = timed_result.value
                 callback(statistics, train_problem, hyperparams, indices)
+
+                # Check if we can use new rho value in the next step of the solution path.
+                rho = ifelse(new_rho > 0, new_rho, rho)
 
                 # Evaluate the solution.
                 r = scoref(train_problem, (train_L, train_X), (val_L, val_X), (test_L, test_X))
@@ -242,7 +249,7 @@ function cv_deadzone(algorithm::AbstractMMAlg, problem::MVDAProblem, lambda::Rea
             indices = (;epsilon=i, fold=k,)
             measured_time = timed_result.time # seconds
             result.time[i,k] = measured_time
-            statistics = timed_result.value
+            statistics, _ = timed_result.value
             callback(statistics, train_problem, hyperparams, indices)
 
             # Evaluate the solution.
@@ -327,7 +334,7 @@ function cv_nonlinear(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::R
             indices = (;gamma=i, fold=k,)
             measured_time = timed_result.time # seconds
             result.time[i,k] = measured_time
-            statistics = timed_result.value
+            statistics, _ = timed_result.value
             callback(statistics, train_problem, hyperparams, indices)
 
             # Evaluate the solution.
