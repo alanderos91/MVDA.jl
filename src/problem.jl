@@ -179,6 +179,8 @@ results consistent with the input model.
 """
 MVDAProblem(data_L, data_X, old::MVDAProblem, kernel::Kernel) = MVDAProblem{floattype(old)}(data_L, data_X, old.encoding, kernel, old.labels, old.intercept)
 
+MVDAProblem(data_L, data_X, old::MVDAProblem, ::Nothing) = MVDAProblem{floattype(old)}(data_L, data_X, old.encoding, nothing, old.labels, old.intercept)
+
 """
 Return the floating-point type used for model coefficients.
 """
@@ -401,24 +403,24 @@ function accuracy(problem::MVDAProblem, data::Tuple{LT,XT}) where {LT,XT}
     return ncorrect / length(L)
 end
 
-function save_model(filename::AbstractString, problem::MVDAProblem)
+function save_model(dir::AbstractString, problem::MVDAProblem)
     @unpack coeff, coeff_proj = problem
-    writedlm(filename*"_coeff.slope", coeff.slope, '\t')
-    writedlm(filename*"_coeff.intercept", coeff.intercept, '\t')
-    writedlm(filename*"_coeff_proj.slope", coeff.slope, '\t')
-    writedlm(filename*"_coeff_proj.intercept", coeff.intercept, '\t')
+    writedlm(joinpath(dir, "coef.slope"), coeff.slope, '\t')
+    writedlm(joinpath(dir, "coef.intercept"), coeff.intercept, '\t')
+    writedlm(joinpath(dir, "proj.slope"), coeff.slope, '\t')
+    writedlm(joinpath(dir, "proj.intercept"), coeff.intercept, '\t')
     return nothing
 end
 
-function load_model(filename::AbstractString)
+function load_model(dir::AbstractString)
     return (;
         coeff=(;
-            slope=readdlm(filename*"_coeff.slope"),
-            intercept=readdlm(filename*"_coeff.intercept"),
+            slope=readdlm(joinpath(dir, "coef.slope")),
+            intercept=readdlm(joinpath(dir, "coef.intercept")),
         ),
         coeff_proj=(;
-            slope=readdlm(filename*"_coeff_proj.slope"),
-            intercept=readdlm(filename*"_coeff_proj.intercept"),
+            slope=readdlm(joinpath(dir, "proj.slope")),
+            intercept=readdlm(joinpath(dir, "proj.intercept")),
         ),
     )
 end
