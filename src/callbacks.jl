@@ -73,7 +73,6 @@ function add_field!(cb::CVCallback, fields::Vararg{Symbol,N}) where N
     return cb.data
 end
 
-
 function (F::CVCallback{<:Any,3})(statistics::Tuple, problem::MVDAProblem, hyperparams, indices)
     @unpack data = F
     i, j, k = values(indices)
@@ -105,3 +104,40 @@ _get_statistic_(statistics, ::Any, ::Any, ::Val{:gradient}) = last(statistics).g
 
 _get_statistic_(::Any, problem::MVDAProblem, ::Any, ::Val{:nactive}) = count_active_variables(problem)
 _get_statistic_(::Any, problem::MVDAProblem, ::Any, ::Val{:pactive}) = count_active_variables(problem) / size(problem.coeff.slope, 1)
+
+
+struct HistoryCallback{T} <: Function
+    data::Dict{Symbol,Vector{T}}
+
+    function HistoryCallback{T}() where T
+        data = Dict{Symbol,Vector{T}}()
+        new{T}(data)
+    end
+end
+
+HistoryCallback() = HistoryCallback{Float64}()    # default to Float64 eltype
+
+function add_field!(cb::HistoryCallback, field::Symbol)
+    global VALID_FIELDS
+    if !(field in VALID_FIELDS)
+        error("Unknown metric $(field).")
+    end
+    data = cb.data
+    T = valtype(data)
+    data[field] = T[]
+    return data
+end
+
+function add_field!(cb::HistoryCallback, fields::Vararg{Symbol,N}) where N
+    for field in fields
+        add_field!(cb, field)
+    end
+    return cb.data
+end
+
+function (F::HistoryCallback)(statistics::Tuple, problem::MVDAProblem, hyperparams)
+    @unpack data = F
+    for (field, arr) in data
+        push!(arr, _get_statistic_(statistics, problem, hyperparams, Val(field)))
+    end
+end
