@@ -17,25 +17,45 @@ end
 # R enters as Yhat
 #
 function shifted_response!(Z, Y, R, epsilon)
-    T = eltype(Z)
-    for i in axes(Y, 1)
-        z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
+    num_julia_threads = Threads.nthreads()
 
-        # Compute residual R = Y - A*B - 1b₀ᵀ
-        copyto!(z, r)
-        BLAS.axpby!(one(T), y, -one(T), r)
-
-        # Compute norm of residual and set the weight for projection onto deadzone.
-        normr = norm(r)
-        w = ifelse(normr > epsilon, (normr-epsilon)/normr, zero(T))
-
-        # Set Z = W∘Y + (1-W)∘Ŷ
-        BLAS.axpby!(w, y, 1-w, z)
-
-        # Set R = W∘R
-        BLAS.scal!(w, r)
+    if num_julia_threads == 1
+        for i in axes(Y, 1)
+            z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
+            shifted_response!(z, y, r, epsilon)
+        end
+    else
+        num_BLAS_threads = BLAS.get_num_threads()
+        try
+            BLAS.set_num_threads(1)
+            @batch per=core for i in axes(Y, 1)
+                z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
+                shifted_response!(z, y, r, epsilon)
+            end
+        finally
+            BLAS.set_num_threads(num_BLAS_threads)
+        end
     end
+
     return nothing
+end
+
+function shifted_response!(z::AbstractVector, y::AbstractVector, r::AbstractVector, epsilon)
+    T = eltype(z)
+
+    # Compute residual R = Y - A*B - 1b₀ᵀ
+    copyto!(z, r)
+    BLAS.axpby!(one(T), y, -one(T), r)
+
+    # Compute norm of residual and set the weight for projection onto deadzone.
+    normr = norm(r)
+    w = ifelse(normr > epsilon, (normr-epsilon)/normr, zero(T))
+
+    # Set Z = W*Y + (1-W)∘Ŷ
+    BLAS.axpby!(w, y, 1-w, z)
+
+    # Set R = W*R
+    BLAS.scal!(w, r)
 end
 
 """
