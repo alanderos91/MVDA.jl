@@ -73,6 +73,14 @@ function add_field!(cb::CVCallback, fields::Vararg{Symbol,N}) where N
     return cb.data
 end
 
+function (F::CVCallback{<:Any,4})(statistics::Tuple, problem::MVDAProblem, hyperparams, indices)
+    @unpack data = F
+    i, j, l, k = values(indices)
+    for (field, arr) in data
+        arr[i,j,l,k] = _get_statistic_(statistics, problem, hyperparams, Val(field))
+    end
+end
+
 function (F::CVCallback{<:Any,3})(statistics::Tuple, problem::MVDAProblem, hyperparams, indices)
     @unpack data = F
     i, j, k = values(indices)
