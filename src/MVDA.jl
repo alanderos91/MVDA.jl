@@ -8,7 +8,7 @@ using MLDataUtils: ObsDimension
 
 # Math & Stats
 using Parameters
-using KernelFunctions, LinearAlgebra, Random, Roots, StableRNGs, Statistics, StatsBase
+using KernelFunctions, LinearAlgebra, Random, StableRNGs, Statistics, StatsBase
 
 # Multithreading
 using Polyester

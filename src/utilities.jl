@@ -243,31 +243,13 @@ function geometric_progression(multiplier::Real=1.2)
     return GeometricProression(multiplier)
 end
 
-function make_sparsity_grid(n, nbins, len=round(Int, 1e1 ^ (log10(n)-1)))
-    function sumr(r, K)
-        if r != 1
-            Float64(r/(r-1) * (r^K - 1))
-        else
-            Float64(K)
-        end
-    end
-
+function make_sparsity_grid(n, len)
     xs = Float64[]
     push!(xs, 0.0)
-
     if n > 100
-        c = fzero(c -> (1-c^(nbins+1))/(1-c) - 2, 0.0, 1-eps())
-        r = fzero(r -> sumr(r, nbins) - len, 0.0, Float64(n))
-        N = zeros(Int, nbins)
-        for k in 1:nbins-1
-            N[k] = max(1, floor(Int, r^k))
-        end
-        N[end] = max(sum(N)-len, len-sum(N))
-        for (k, nk) in enumerate(N)
-            a = xs[end]
-            b = xs[end] + c^k
-            vals = range(a, b, length=nk+1)
-            foreach(Base.Fix1(push!, xs), vals[2:end])
+        r = exp(log(n) / len)
+        for k in 1:len-1
+            push!(xs, 1 - r^k / n)
         end
     else
         for i in 0:n-1
