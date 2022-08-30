@@ -407,8 +407,8 @@ function save_model(dir::AbstractString, problem::MVDAProblem)
     @unpack coeff, coeff_proj = problem
     writedlm(joinpath(dir, "coef.slope"), coeff.slope, '\t')
     writedlm(joinpath(dir, "coef.intercept"), coeff.intercept, '\t')
-    writedlm(joinpath(dir, "proj.slope"), coeff.slope, '\t')
-    writedlm(joinpath(dir, "proj.intercept"), coeff.intercept, '\t')
+    writedlm(joinpath(dir, "proj.slope"), coeff_proj.slope, '\t')
+    writedlm(joinpath(dir, "proj.intercept"), coeff_proj.intercept, '\t')
     return nothing
 end
 

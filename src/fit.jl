@@ -27,13 +27,13 @@ function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon,
     callback((0, state), problem, hyperparams)
     old = state.objective
 
-    if state.gradient < gtol
-        return (0, state)
-    end
-
     # Initialize iteration counts.
     iters = 0
     nesterov_iter = 1
+
+    if state.gradient < gtol
+        return ((iters, state), zero(lambda))
+    end
 
     for iter in 1:maxiter
         iters += 1
