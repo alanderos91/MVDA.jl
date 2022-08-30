@@ -4,19 +4,6 @@ Placeholder for callbacks in main functions.
 __do_nothing_callback__((iter, state), problem, hyperparams) = nothing
 __do_nothing_callback__(statistics, problem, hyperparams, indices) = nothing
 
-function prediction_accuracies(problem::MVDAProblem, train_set, validation_set, test_set)
-    Tr = accuracy(problem, train_set)
-    V = accuracy(problem, validation_set)
-    T = accuracy(problem, test_set)
-
-    return (Tr, V, T)
-end
-
-function prediction_errors(problem, train_set, validation_set, test_set)
-    Tr, V, T = prediction_accuracies(problem, train_set, validation_set, test_set)
-    return (1-Tr, 1-V, 1-T)
-end
-
 struct VerboseCallback <: Function
     every::Int
 end
@@ -49,6 +36,7 @@ CVCallback(dims...) = CVCallback{Float64}(dims...)      # default to Float64 elt
 
 const VALID_FIELDS = [
     :gamma, :epsilon, :lambda, :sparsity,   # hyperparameters; probably not needed
+    :rho,                                   # distance penalty coefficient
     :iters,                                 # total number of iterations
     :risk, :loss, :objective,               # loss metrics
     :gradient, :distance, :penalty,         # convergence quality metrics
@@ -101,6 +89,7 @@ _get_statistic_(::Any, ::Any, hyperparams, ::Val{:gamma}) = hyperparams.gamma
 _get_statistic_(::Any, ::Any, hyperparams, ::Val{:epsilon}) = hyperparams.epsilon
 _get_statistic_(::Any, ::Any, hyperparams, ::Val{:lambda}) = hyperparams.lambda
 _get_statistic_(::Any, ::Any, hyperparams, ::Val{:sparsity}) = hyperparams.sparsity
+_get_statistic_(::Any, ::Any, hyperparams, ::Val{:rho}) = hyperparams.rho
 
 _get_statistic_(statistics, ::Any, ::Any, ::Val{:iters}) = first(statistics)
 _get_statistic_(statistics, ::Any, ::Any, ::Val{:risk}) = last(statistics).risk
@@ -112,7 +101,6 @@ _get_statistic_(statistics, ::Any, ::Any, ::Val{:gradient}) = last(statistics).g
 
 _get_statistic_(::Any, problem::MVDAProblem, ::Any, ::Val{:nactive}) = count_active_variables(problem)
 _get_statistic_(::Any, problem::MVDAProblem, ::Any, ::Val{:pactive}) = count_active_variables(problem) / size(problem.coeff.slope, 1)
-
 
 struct HistoryCallback{T} <: Function
     data::Dict{Symbol,Vector{T}}

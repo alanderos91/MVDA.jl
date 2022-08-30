@@ -116,7 +116,7 @@ const DEFAULT_RHO_MAX = 1e8
 const DEFAULT_ANNEALING = geometric_progression(1.2) # rho_0 * 1.2^t
 const DEFAULT_NESTEROV = 10
 const DEFAULT_CALLBACK = __do_nothing_callback__
-const DEFAULT_SCORE_FUNCTION = prediction_accuracies
+const DEFAULT_SCORE_FUNCTION = MVDA.accuracy
 
 const DEFAULT_GTOL = 1e-3
 const DEFAULT_DTOL = 1e-3
