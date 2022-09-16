@@ -93,12 +93,12 @@ end
 # sparse model
 function evaluate_gradient!(problem::MVDAProblem, lambda, rho)
     @unpack coeff, res, grad, intercept = problem
-    n, _, _ = probdims(problem)
+    n, p, _ = probsizes(problem)
     A = design_matrix(problem)
     B = coeff.slope
     T = floattype(problem)
 
-    alpha, beta, gamma = convert(T, 1/n), convert(T, lambda), convert(T, rho)
+    alpha, beta, gamma = convert(T, 1/n), convert(T, lambda/p), convert(T, rho/p)
 
     if intercept
         mean!(grad.intercept, res.loss')
@@ -114,12 +114,12 @@ end
 # regularized model
 function evaluate_gradient!(problem::MVDAProblem, lambda)
     @unpack coeff, res, grad, intercept = problem
-    n, _, _ = probdims(problem)
+    n, p, _ = probsizes(problem)
     A = design_matrix(problem)
     B = coeff.slope
     T = floattype(problem)
 
-    alpha, beta = convert(T, 1/n), convert(T, lambda)
+    alpha, beta = convert(T, 1/n), convert(T, lambda/p)
 
     if intercept
         mean!(grad.intercept, res.loss')
@@ -147,7 +147,8 @@ Evaluate the penalized least squares criterion. Also updates the gradient.
 This assumes that projections have been handled externally.
 """
 function evaluate_objective!(problem::MVDAProblem, extras, epsilon, lambda, rho)
-    @unpack n, coeff, res, grad = problem
+    @unpack coeff, res, grad = problem
+    n, p, _ = probsizes(problem)
 
     evaluate_residuals!(problem, extras, epsilon, true, true)
     evaluate_gradient!(problem, lambda, rho)
@@ -155,16 +156,17 @@ function evaluate_objective!(problem::MVDAProblem, extras, epsilon, lambda, rho)
     B, R, Q, G = coeff.slope, res.loss, res.dist, grad
     risk = 1//n * dot(R, R)
     penalty = dot(B, B)
-    loss = 1//2 * (risk + lambda*penalty)
+    loss = 1//2 * (risk + lambda/p*penalty)
     distsq = dot(Q, Q)
-    obj = loss + 1//2*rho*distsq
+    obj = loss + 1//2*rho/p*distsq
     gradsq = dot(G, G)
 
     return __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
 end
 
 function evaluate_objective!(problem::MVDAProblem, extras, epsilon, lambda)
-    @unpack n, coeff, res, grad = problem
+    @unpack coeff, res, grad = problem
+    n, p, _ = probsizes(problem)
 
     evaluate_residuals!(problem, extras, epsilon, true, false)
     evaluate_gradient!(problem, lambda)
@@ -172,7 +174,7 @@ function evaluate_objective!(problem::MVDAProblem, extras, epsilon, lambda)
     B, R, G = coeff.slope, res.loss, grad
     risk = 1//n * dot(R, R)
     penalty = dot(B, B)
-    loss = 1//2 * (risk + lambda*penalty)
+    loss = 1//2 * (risk + lambda/p*penalty)
     distsq = zero(floattype(problem))
     obj = loss
     gradsq = dot(G, G)
@@ -252,13 +254,13 @@ function make_sparsity_grid(n, len)
             push!(xs, 1 - r^k / n)
         end
     else
-        for i in 0:n-1
+        for i in 0:n
             push!(xs, i/n)
         end
     end
     ys = unique!(round.(Int, (1 .- xs) .* n))
+    filter!(<=(n), ys)
     xs = sort!(1 .- ys ./ n)
-    filter!(!isequal(1.0), xs)
     return xs
 end
 

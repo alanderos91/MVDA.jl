@@ -196,10 +196,6 @@ function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, 
     state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
     old = state.objective
 
-    if state.gradient < gtol
-        return (0, state)
-    end
-
     # Initialize iteration counts.
     iters = 0
     nesterov_iter = 1

@@ -66,8 +66,9 @@ end
 
 # Apply one update in distance penalized problem.
 function __mm_iterate__(::SD, problem::MVDAProblem, extras, epsilon, lambda, rho, k)
-    n , T = problem.n, floattype(problem)
-    alpha, beta = T(1/n), T(lambda+rho)
+    n, p, _ = probsizes(problem)
+    T = floattype(problem)
+    alpha, beta = T(1/n), T(lambda/p+rho/p)
     apply_projection(extras.projection, problem, k)
     evaluate_residuals!(problem, extras, epsilon, true, true)
     evaluate_gradient!(problem, lambda, rho)
@@ -78,8 +79,9 @@ end
 
 # Apply one update in regularized problem.
 function __mm_iterate__(::SD, problem::MVDAProblem, extras, epsilon, lambda)
-    n , T = problem.n, floattype(problem)
-    alpha, beta = T(1/n), T(lambda)
+    n, p, _ = probsizes(problem)
+    T = floattype(problem)
+    alpha, beta = T(1/n), T(lambda/p)
     evaluate_residuals!(problem, extras, epsilon, true, false)
     evaluate_gradient!(problem, lambda)
     __steepest_descent__(problem, extras, alpha, beta)

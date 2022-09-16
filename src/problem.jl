@@ -210,6 +210,13 @@ Returns the number of samples, number of features, and number of categories, res
 """
 probdims(problem::MVDAProblem) = (problem.n, problem.p, problem.c)
 
+"""
+Returns the number of samples, number of variables, and number of categories, respectively.
+"""
+probsizes(problem::MVDAProblem) = probsizes(problem.kernel, problem)
+probsizes(::Nothing, problem::MVDAProblem) = probdims(problem)
+probsizes(::Kernel, problem::MVDAProblem) = (problem.n, problem.n, problem.c)
+
 function Base.show(io::IO, problem::MVDAProblem)
     n, p, c = probdims(problem)
     T = floattype(problem)
@@ -366,7 +373,7 @@ end
 
 function prediction_probabilities(problem::MVDAProblem, data::Tuple{LT,XT}) where {LT,XT}
     C, d = confusion_matrix(problem, data)
-    S = sum(C, dims=1)
+    S = sum(C, dims=2)
     return (C ./ S, d)
 end
 

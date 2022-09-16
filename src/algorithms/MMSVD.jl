@@ -37,14 +37,16 @@ end
 __mm_init__(::MMSVD, problem::MVDAProblem, extras) = extras
 
 # Update data structures due to changing ρ.
-__mm_update_rho__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem.n, lambda, rho)
+__mm_update_rho__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem, lambda, rho)
 
 # Update data structures due to changing λ. 
-__mm_update_lambda__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem.n, lambda, rho)
+__mm_update_lambda__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem, lambda, rho)
 
-function update_diagonal(extras, n, lambda, rho)
+function update_diagonal(extras, problem, lambda, rho)
     @unpack s, Psi = extras
-    alpha, beta = 1/n, lambda+rho
+    n, p, _ = probsizes(problem)
+
+    alpha, beta = 1/n, lambda/p+rho/p
     for i in eachindex(Psi.diag)
         s2 = s[i]^2
         Psi.diag[i] = alpha*s2 / (alpha*s2 + beta)
@@ -119,9 +121,9 @@ end
 
 # Apply one update.
 function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, epsilon, lambda, rho, k)
-    n = problem.n
+    n, p, _ = probsizes(problem)
     T = floattype(problem)
-    c1, c2, c3 = T(1/n), T(lambda), T(rho)
+    c1, c2, c3 = T(1/n), T(lambda/p), T(rho/p)
     
     f = let c1=c1, c2=c2, c3=c3
         function(problem, extras)
@@ -147,9 +149,9 @@ end
 
 # Apply one update in regularized problem.
 function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, epsilon, lambda)
-    n = problem.n
+    n, p, _ = probsizes(problem)
     T = floattype(problem)
-    c1, c2 = T(1/n), T(lambda)
+    c1, c2 = T(1/n), T(lambda/p)
     
     f = let c1=c1, c2=c2
         function(problem, extras)

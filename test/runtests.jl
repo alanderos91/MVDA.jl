@@ -18,32 +18,29 @@ using Test
     end
 end
 
-function test_on_dataset(prob, target, X, k)
-    n, p, c = length(target), size(X, 2), length(unique(target))
-    has_intercept = prob.intercept
+function test_on_dataset(prob, L, X, k)
+    n, p, c = length(L), size(X, 2), length(unique(L))
 
     @testset "MVDAProblem" begin
         # coefficient shape
-        for field in (:coeff, :coeff_prev, :proj, :grad)
+        for field in (:coeff, :coeff_prev, :coeff_proj, :grad)
             arr = getfield(prob, field)
-            @test size(arr.all, 1) == p + has_intercept && size(arr.all, 2) == c-1
-            @test all(j -> length(arr.dim[j]) == p + has_intercept, eachindex(arr.dim))
+            @test size(arr.slope, 1) == p && size(arr.slope, 2) == c-1
+            @test length(arr.intercept) == c-1
         end
     
         # residual shape
-        r1 = prob.res.main.all
-        r2 = prob.res.dist.all
-        r3 = prob.res.weighted.all
+        r1 = prob.res.loss
+        r2 = prob.res.dist
         @test size(r1, 1) == n && size(r1, 2) == c-1
-        @test size(r2, 1) == p + has_intercept && size(r2, 2) == c-1
-        @test size(r3, 1) == n && size(r3, 2) == c-1
+        @test size(r2, 1) == p && size(r2, 2) == c-1
     
         # verify problem dimensions
         dims = MVDA.probdims(prob)
         @test n == dims[1] && p == dims[2] && c == dims[3]
     
         # check vertex definitions
-        v = prob.vertex
+        v = prob.encoding.vertex
         d = [norm(v[j] - v[i]) for i in 1:c for j in i+1:c]
         dmin, dmax = extrema(d)
         @test all(j -> norm(v[j]) ≈ 1, eachindex(v))    # vertices lie on unit circle
@@ -51,25 +48,25 @@ function test_on_dataset(prob, target, X, k)
     end
     
     @testset "Evaluation" begin
-        @unpack Y, X, coeff, res, proj, grad = prob
-        B = coeff.all
-        P = proj.all
+        @unpack Y, X, coeff, res, coeff_proj, grad = prob
+        B = coeff.slope
+        P = coeff_proj.slope
         T = Float64
+        has_intercept = prob.intercept
     
         # Initialize coefficients and parameters
         rng = StableRNG(1903)
         randn!(rng, B)
         ϵ = 0.5 * sqrt(2*c/(c-1))
+        λ = 1.0
         ρ = 4.7
     
         # Initialize other data structures.
         extras = MVDA.__mm_init__(MMSVD(), prob, nothing)
-        MVDA.__mm_update_sparsity__(MMSVD(), prob, ϵ, ρ, k, extras)
-        MVDA.__mm_update_rho__(MMSVD(), prob, ϵ, ρ, k, extras)
-        operator = extras.projection
+        MVDA.__mm_update_rho__(MMSVD(), prob, extras, λ, ρ)
 
         # Set projection.
-        MVDA.apply_projection(operator, prob, k)
+        MVDA.apply_projection(extras.projection, prob, k)
 
         # Compute residuals and gradient.
         XB = X*B
@@ -77,60 +74,65 @@ function test_on_dataset(prob, target, X, k)
         R2 = P - B
 
         normr = [norm(ri) for ri in eachrow(R1)]
-        W = Diagonal( [ifelse(normr[i] ≤ ϵ, 0.0, (normr[i]-ϵ) / normr[i]) for i in eachindex(normr)] )
-        R1_scaled = 1/sqrt(n) * W * R1
+        W = Diagonal( [ifelse(normr[i] ≤ ϵ, zero(T), (normr[i]-ϵ) / normr[i]) for i in eachindex(normr)] )
         Z = similar(Y)
         @views for i in axes(Z, 1)
             Z[i, :] .= ifelse(normr[i] ≤ ϵ, XB[i, :], W[i,i] * Y[i, :] + (1-W[i,i]) * XB[i, :])
+            R1[i, :] .= Z[i, :] - XB[i, :]
         end
-        G = -1/n * X' * (Z - XB) - ρ * (P - B)
-
+        G = -1/n * X' * (Z - XB) - ρ/p * (P - B) + λ/p * B
+        g = if has_intercept
+            -vec(mean(R1, dims=1))
+        else
+            zeros(c-1)
+        end
         @testset "Residuals" begin
-            MVDA.__evaluate_residuals__(prob, ϵ, extras, true, true, true)
-            @test all(j -> res.main.dim[j] ≈ 1/sqrt(n) * view(R1, :, j), 1:c-1)
-            @test all(j -> res.dist.dim[j] ≈ view(R2, :, j), 1:c-1)
-            @test all(j -> res.weighted.dim[j] ≈ view(R1_scaled, :, j), 1:c-1)
-            @test all(i -> view(extras.Z, i, :) ≈ view(Z, i, :), 1:n)
+            MVDA.evaluate_residuals!(prob, extras, ϵ, true, true)
+            @test norm(res.loss .- R1) < sqrt(eps())
+            @test norm(res.dist .- R2) < sqrt(eps())
+            @test norm(extras.Z .- Z) < sqrt(eps())
         end
     
         @testset "Gradient" begin
-            MVDA.__evaluate_gradient__(prob, ρ, extras)
-            @test all(j -> grad.dim[j] ≈ view(G, :, j), 1:c-1)
+            MVDA.evaluate_gradient!(prob, λ, ρ)
+            @test norm(grad.slope .- G) < sqrt(eps())
         end
     
         @testset "Objective" begin
-            loss, obj, dist, gradsq = MVDA.__evaluate_objective__(prob, ϵ, ρ, extras)
-            @test loss ≈ dot(R1_scaled, R1_scaled)
-            @test obj ≈ 1//2 * (dot(R1_scaled, R1_scaled) + ρ * dot(R2, R2))
-            @test dist ≈ dot(R2, R2)
-            @test gradsq ≈ dot(G, G)
+            nt = MVDA.evaluate_objective!(prob, extras, ϵ, λ, ρ)
+            @test nt.risk ≈ 1//n * dot(R1, R1)
+            @test nt.loss ≈ 1//2 * (1//n * dot(R1, R1) + λ/p * dot(B, B))
+            @test nt.objective ≈ 1//2 * (1//n * dot(R1, R1) + λ/p * dot(B, B) + ρ/p * dot(R2, R2))
+            @test nt.distance ≈ sqrt(dot(R2, R2))
+            @test nt.gradient ≈ sqrt(dot(G, G) + dot(g, g))
         end
     end
     
     @testset "Descent Property" begin
         ϵ = 0.5 * sqrt(2*c/(c-1))
+        λ = 1.0
         ρ = 1.234
         
         @testset "$(algorithm)" for algorithm in (MMSVD(), SD(),)
             function test_descent_property(s, threshold)
-                B = prob.coeff.all
+                B = prob.coeff.slope
                 rng = StableRNG(1903)
                 randn!(rng, B)
-                copyto!(prob.coeff_prev.all, B)
+                copyto!(prob.coeff_prev.slope, B)
                 
-                _, _, obj0A, _, _ = MVDA.anneal(algorithm, prob, ϵ, ρ, s, ninner=0, gtol=1e-6, nesterov_threshold=threshold)
-                _, _, obj0B, _, _ = MVDA.anneal(algorithm, prob, ϵ, ρ, s, ninner=0, gtol=1e-6, nesterov_threshold=threshold)
-                _, _, obj1, _, _ = MVDA.anneal(algorithm, prob, ϵ, ρ, s, ninner=1, gtol=1e-6, nesterov_threshold=threshold)
-                _, _, obj2, _, _ = MVDA.anneal(algorithm, prob, ϵ, ρ, s, ninner=1, gtol=1e-6, nesterov_threshold=threshold)
-                _, _, obj100, _, _ = MVDA.anneal(algorithm, prob, ϵ, ρ, s, ninner=98, gtol=1e-6, nesterov_threshold=threshold)
-                _, _, objfinal, _, gradsq = MVDA.anneal(algorithm, prob, ϵ, ρ, s, ninner=10^4, gtol=1e-8, nesterov_threshold=threshold)
+                (_, state0A) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=0, gtol=1e-3, nesterov=threshold)
+                (_, state0B) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=0, gtol=1e-3, nesterov=threshold)
+                (_, state1) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=1, gtol=1e-3, nesterov=threshold)
+                (_, state2) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=1, gtol=1e-3, nesterov=threshold)
+                (_, state100) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=98, gtol=1e-3, nesterov=threshold)
+                (_, statefinal) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=10^4, gtol=1e-4, nesterov=threshold)
     
-                @test obj0A == obj0B # no iterations
-                @test obj0A > obj1   # decrease after 1 iteration
-                @test obj1 > obj2    # decrease after 1 iteration
-                @test obj0A > obj100 # decrease after 100 iterations
-                @test obj0A > objfinal # decrease at final estimate
-                @test gradsq < 1e-8 # convergence
+                @test state0A.objective == state0B.objective # no iterations
+                @test state0A.objective > state1.objective   # decrease after 1 iteration
+                @test state1.objective > state2.objective    # decrease after 1 iteration
+                @test state0A.objective > state100.objective # decrease after 100 iterations
+                @test state0A.objective > statefinal.objective # decrease at final estimate
+                @test statefinal.gradient < 1e-4 # convergence
                 @test all(!isnan, B) # no instability
             end
             
@@ -148,15 +150,15 @@ end
 
 # tests on example datasets
 df = MVDA.dataset("iris")
-target, X = Vector(df.target), Matrix(df[!,2:end])
+L, X = Vector(df[!,1]), Matrix(df[!,2:end])
 k = 2
 
 @testset "w/ Intercept" begin
-    prob = MVDAProblem(target, X, intercept=true)
-    test_on_dataset(prob, target, X, k)
+    prob = MVDAProblem(L, X, intercept=true)
+    test_on_dataset(prob, L, X, k)
 end
 
 @testset "w/o Intercept" begin
-    prob = MVDAProblem(target, X, intercept=false)
-    test_on_dataset(prob, target, X, k)
+    prob = MVDAProblem(L, X, intercept=false)
+    test_on_dataset(prob, L, X, k)
 end
