@@ -17,3 +17,6 @@ julia -t ${JULIA_NUM_THREADS} --project=@. examples/cancer.jl /home/alanderos/De
 
 echo "Running examples with nonlinear classifiers"
 julia -t ${JULIA_NUM_THREADS} --project=@. examples/nonlinear.jl /home/alanderos/Desktop/VDA-Results/nonlinear
+
+echo "Running MS example"
+julia -t ${JULIA_NUM_THREADS} --project=@. examples/ms.jl /home/alanderos/Desktop/VDA-Results/MS

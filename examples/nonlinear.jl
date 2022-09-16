@@ -20,7 +20,7 @@ end
 
 # Waveform
 function waveform()
-    n_cv, n_test = 375, 10^3
+    n_cv, n_test = 250, 10^3
     nsamples = n_cv + n_test
     nfeatures = 21
     L, X = MVDA.waveform(nsamples, nfeatures; rng=StableRNG(1903))
@@ -37,19 +37,21 @@ examples = (
     #   5. tuple: number epsilon values, number gamma values, number lambda values, number sparsity values
     #   6. data transformation for normalization/standardization
     #
-    ("clouds", (RBFKernel(), true,), (5, 50, 250 / 1250,), (11, 13, 13, 50), ZScoreTransform),
-    ("circles", (RBFKernel(), true,), (5, 50, 250 / 1250,), (11, 13, 13, 50), ZScoreTransform),
-    ("waveform", (RBFKernel(), true,), (5, 50, 375 / 1375,), (11, 13, 13, 50), ZScoreTransform),
-    ("spiral", (RBFKernel(), true,), (5, 50, 0.8,), (11, 13, 13, 50), ZScoreTransform),
-    ("spiral-hard", (RBFKernel(), true,), (5, 50, 0.8,), (11, 13, 13, 50), ZScoreTransform),
-    ("vowel", (RBFKernel(), true,), (5, 50, 528 / 990,), (11, 13, 13, 50), NoTransformation),   # use cv / test split in original dataset: 528 + 462
-    ("HAR", (RBFKernel(), true,), (5, 50, 7352 / 10299,), (11, 13, 13, 50), NoTransformation),  # use cv / test split in original dataset: 7352 + 2947
+    ("clouds", (RBFKernel(), true,), (5, 50, 250/1250,), (11, 5, 25, 200), ZScoreTransform, true),
+    ("circles", (RBFKernel(), true,), (5, 50, 250/1250,), (11, 5, 25, 200), ZScoreTransform, true),
+    ("waveform", (RBFKernel(), true,), (5, 50, 250/1250,), (5, 5, 5, 200), ZScoreTransform, true),
+    ("spiral", (RBFKernel(), true,), (5, 50, 0.5,), (5, 5, 5, 200), ZScoreTransform, true),
+    ("spiral-hard", (RBFKernel(), true,), (5, 50, 0.5,), (5, 5, 5, 200), ZScoreTransform, true),
+    # use cv / test split in original dataset: 528 + 462
+    ("vowel", (RBFKernel(), true,), (5, 50, 528 / 990,), (5, 5, 5, 100), NoTransformation, false),
+    # # use cv / test split in original dataset: 7352 + 2947
+    # ("HAR", (RBFKernel(), true,), (5, 10, 7352 / 10299,), (11, 5, 25, 200), NoTransformation, false),
 )
 
 dir = ARGS[1]
 @info "Output directory: $(dir)"
 
-for (example, prob_settings, cv_settings, nhyper, data_transform) in examples
+for (example, prob_settings, cv_settings, nhyper, data_transform, preshuffle) in examples
     df = if example == "clouds"
         clouds()
     elseif example == "circles"
@@ -62,7 +64,7 @@ for (example, prob_settings, cv_settings, nhyper, data_transform) in examples
     data = (string.(df[!,1]), Matrix{Float64}(df[!,2:end]))
     kernel, intercept = prob_settings
     (nfolds, nreplicates, split) = cv_settings
-    run(dir, example, data, nhyper, false;
+    run(dir, example, data, nhyper, preshuffle;
         at=split,           # CV set / Test set split
         nfolds=nfolds,      # number of folds
         data_transform=data_transform,
