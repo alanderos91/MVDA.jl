@@ -6,6 +6,9 @@ function project_l0_ball!(x::AbstractVector, k::Integer,
     idx::T=collect(eachindex(x)),
     buffer::T=similar(idx)) where T <: AbstractVector{<:Integer}
     #
+    is_equal_magnitude(x, y) = abs(x) == abs(y)
+    is_equal_magnitude(y) = Base.Fix2(is_equal_magnitude, y)
+    #
     n = length(x)
     # do nothing if k > length(x)
     if k ≥ n return x end
@@ -21,10 +24,10 @@ function project_l0_ball!(x::AbstractVector, k::Integer,
     # resolve ties
     if nonzero_count > k
         number_to_drop = nonzero_count - k
+        _indexes_ = findall(is_equal_magnitude(pivot), x)
         _buffer_ = view(buffer, 1:number_to_drop)
-        _indexes_ = findall(!iszero, x)
         sample!(_indexes_, _buffer_, replace=false)
-        for i in _buffer_
+        @inbounds for i in _buffer_
             x[i] = 0
         end
     end

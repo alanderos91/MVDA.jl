@@ -4,6 +4,7 @@ using Test
 
 @testset "Projections" begin
     @testset "L0" begin
+        # randomized
         for _ in 1:10
             number_components = 1000
             x = 10 * randn(number_components)
@@ -14,6 +15,20 @@ using Test
             nzidx = findall(xi -> xi != 0, xproj)
             @test length(nzidx) ≤ k
             @test sort!(xproj[nzidx], by=abs, rev=true) == sort(x, by=abs, rev=true)[1:k]
+        end
+
+        # ties
+        x = Float64[2, 1, 1, 1, 1, -0.6, 0.5, 0.5]
+        shuffle!(StableRNG(1234), x)
+        P = MVDA.L0Projection(length(x))
+        x_sorted = sort(x, lt=isless, by=abs, rev=true, order=Base.Order.Forward)
+        x_zero = P(copy(x), 0)
+        @test x_zero == zeros(length(x))
+        for k in 1:length(x)
+            x_proj = P(copy(x), k)
+            idx = findall(!isequal(0), x_proj)
+            topk = sort!(x_proj[idx], lt=isless, by=abs, rev=true)
+            @test topk == x_sorted[1:k]
         end
     end
 end
