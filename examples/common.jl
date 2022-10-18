@@ -73,26 +73,26 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
         if c > 2
             1e1 .^ range(-3, log10(maximum_deadzone(problem)), length=ne)
         else
-            1e1 .^ range(-3, log10(0.5), length=ne)
+            1e1 .^ range(-6, 0, length=ne)
         end
     else
         if c > 2
             [maximum_deadzone(problem)]
         else
-            [0.5]
+            [1e-6]
         end
     end
 
     # Lambda grid.
     l_grid = if nl > 1
-        make_log10_grid(-4, 0, nl)
+        make_log10_grid(-6, 6, nl)
     else
         [1.0]
     end
 
     # Gamma / Scale grid.
     g_grid = if ng > 1
-        make_log10_grid(-3, 0.5, ng)
+        make_log10_grid(-3, 1, ng)
     else
         [0.0]
     end

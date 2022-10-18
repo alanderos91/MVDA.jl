@@ -279,8 +279,8 @@ function TCGA_topgenes()
     coeff = [MVDA.load_model("/home/alanderos/Desktop/VDA-Results/linear/TCGA-HiSeq/modelA/$(k)").coeff_proj.slope for k in 1:10]
     effect_size = map(x -> map(norm, eachrow(x)), coeff)
     nz_row = map(find_nz, coeff)
-    gene_idx = [sortperm(effect_size[k][nz_row[k]], rev=true) for k in eachindex(nz_row)]
-
+    nz_row_idx = [sortperm(effect_size[k][nz_row[k]], rev=true) for k in eachindex(nz_row)]
+    gene_idx = [nz_row[k][nz_row_idx[k]] for k in eachindex(nz_row)]
     gene_subsets = map(idx -> genes[idx], gene_idx)
 
     cm = Dict{String,Int}()
@@ -328,14 +328,17 @@ function MS_error_rates(dir)
         )
     end
     #
-    examples = ["all", "dropmissing", "combined", "features"]
-    labels = ["Full dataset" "Drop missing"; "Combine B and C" "Filter features"]
+    examples = ["all", "dropC", "dropB", "dropA"]
+    example_labels = ["All", "Drop Class C", "Drop Class B", "Drop Class A"]
+    example_titles = ["All" "Drop Class C"; "Drop Class B" "Drop Class A"]
     classes = ["A", "B", "C"]
+    tick_set = [
+        (1:3, classes) (1:2, classes[[1,2]]);
+        (1:2, classes[[1,3]]) (1:2, classes[[2,3]])
+    ]
     kwargs = (;
         xlabel="Class",
         ylabel="Predicted",
-        xticks=(1:3, classes),
-        yticks=(1:3, classes),
         xticksize=0,
         yticksize=0,
         yreversed=true,
@@ -358,22 +361,26 @@ function MS_error_rates(dir)
     end
 
     modelA = load_and_convert(dir, "all", 3:5)
-    modelB = load_and_convert(dir, "dropmissing", 3:5)
-    modelC = load_and_convert(dir, "combined", 3:4)
-    modelD = load_and_convert(dir, "features", 3:5)
+    modelB = load_and_convert(dir, "dropC", 3:4)
+    modelC = load_and_convert(dir, "dropB", 3:4)
+    modelD = load_and_convert(dir, "dropA", 3:4)
 
     global SETTINGS
     fig = Figure(resolution=SETTINGS[:resolution], fontsize=SETTINGS[:fontsize])
     g = fig[1,1] = GridLayout()
 
     axmain = Axis(g[1:2,1:2],
-        xticks=(1:4, ["Full\ndataset", "Drop\nmissing", "Combine\nB and C", "Filter\nfeatures"]),
+        xticks=(1:4, example_labels),
         ylabel="Classification error",
         xticksize=0,
         yticksize=2,
         xticklabelalign=(:center,:top),
     )
-    ax = [Axis(g[i,j+2]; title=labels[i,j], kwargs...) for i in 1:2, j in 1:2]
+    ax = Matrix{Axis}(undef, 2, 2)
+    for i in 1:2, j in 1:2
+        myticks = tick_set[i,j]
+        ax[i,j] = Axis(g[i,j+2]; title=example_titles[i,j], xticks=myticks, yticks=myticks, kwargs...)
+    end
 
     boxplot!(axmain, xs, ys,
         dodge=dodge,
@@ -386,8 +393,8 @@ function MS_error_rates(dir)
         [PolyElement(color=:gray75), PolyElement(color=:gray50)],
         ["Sparse", "Reduced"],
         framevisible=false,
-        halign=:center,
-        valign=:top,
+        halign=:left,
+        valign=:bottom,
         rowgap=5,
     )
     
@@ -463,9 +470,11 @@ function benchmark_summary(dir, examples; include_gamma=false)
     end
 
     if include_gamma
-        df = DataFrame(title=title, epsilon=es, lambda=ls, gamma=gs, k=ks, train=trn, test=tst)
+        # df = DataFrame(title=title, epsilon=es, lambda=ls, gamma=gs, k=ks, train=trn, test=tst)
+        df = DataFrame(title=title, lambda=ls, gamma=gs, k=ks, train=trn, test=tst)
     else
-        df = DataFrame(title=title, epsilon=es, lambda=ls, k=ks, train=trn, test=tst)
+        # df = DataFrame(title=title, epsilon=es, lambda=ls, k=ks, train=trn, test=tst)
+        df = DataFrame(title=title, lambda=ls, k=ks, train=trn, test=tst)
     end
 
     return df
@@ -507,7 +516,7 @@ function main(input, output)
 
     header = [
         "",
-        L"\multicolumn{1}{c}{$\log_{10}(\epsilon)$}",
+        # L"\multicolumn{1}{c}{$\log_{10}(\epsilon)$}",
         L"\multicolumn{1}{c}{$\log_{10}(\lambda)$}",
         L"\multicolumn{1}{c}{$k$}",
         "\\multicolumn{1}{c}{Train}",
