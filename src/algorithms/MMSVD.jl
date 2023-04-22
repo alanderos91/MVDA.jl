@@ -8,6 +8,7 @@ function __mm_init__(::MMSVD, problem::MVDAProblem, ::Nothing)
     @unpack coeff = problem
     A = design_matrix(problem)
     n, p, c = probdims(problem)
+    nd = vertex_dimension(problem.encoding)
     T = floattype(problem)
     nparams = ifelse(problem.kernel isa Nothing, p, n)
 
@@ -22,8 +23,8 @@ function __mm_init__(::MMSVD, problem::MVDAProblem, ::Nothing)
     Abar = vec(mean(A, dims=1))
     
     # worker arrays
-    Z = fill!(similar(A, n, c-1), zero(T))
-    buffer = fill!(similar(A, r, c-1), zero(T))
+    Z = fill!(similar(A, n, nd), zero(T))
+    buffer = fill!(similar(A, r, nd), zero(T))
     Psi = Diagonal(fill!(similar(A, r), 0))
     
     return (;

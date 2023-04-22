@@ -35,20 +35,26 @@ end
 
 function test_on_dataset(prob, L, X, k)
     n, p, c = length(L), size(X, 2), length(unique(L))
+    enc = prob.encoding
+    if enc isa MVDA.StandardSimplexEncoding
+        nd = c
+    elseif enc isa MVDA.ProjectedSimplexEncoding
+        nd = c-1
+    end
 
     @testset "MVDAProblem" begin
         # coefficient shape
         for field in (:coeff, :coeff_prev, :coeff_proj, :grad)
             arr = getfield(prob, field)
-            @test size(arr.slope, 1) == p && size(arr.slope, 2) == c-1
-            @test length(arr.intercept) == c-1
+            @test size(arr.slope, 1) == p && size(arr.slope, 2) == nd
+            @test length(arr.intercept) == nd
         end
     
         # residual shape
         r1 = prob.res.loss
         r2 = prob.res.dist
-        @test size(r1, 1) == n && size(r1, 2) == c-1
-        @test size(r2, 1) == p && size(r2, 2) == c-1
+        @test size(r1, 1) == n && size(r1, 2) == nd
+        @test size(r2, 1) == p && size(r2, 2) == nd
     
         # verify problem dimensions
         dims = MVDA.probdims(prob)
@@ -99,7 +105,7 @@ function test_on_dataset(prob, L, X, k)
         g = if has_intercept
             -vec(mean(R1, dims=1))
         else
-            zeros(c-1)
+            zeros(nd)
         end
         @testset "Residuals" begin
             MVDA.evaluate_residuals!(prob, extras, ϵ, true, true)
@@ -168,12 +174,26 @@ df = MVDA.dataset("iris")
 L, X = Vector(df[!,1]), Matrix(df[!,2:end])
 k = 2
 
-@testset "w/ Intercept" begin
-    prob = MVDAProblem(L, X, intercept=true)
-    test_on_dataset(prob, L, X, k)
+@testset "ProjectedSimplexEncoding" begin
+    @testset "w/ Intercept" begin
+        prob = MVDAProblem(L, X, encoding=:projected, intercept=true)
+        test_on_dataset(prob, L, X, k)
+    end
+
+    @testset "w/o Intercept" begin
+        prob = MVDAProblem(L, X, encoding=:projected, intercept=false)
+        test_on_dataset(prob, L, X, k)
+    end
 end
 
-@testset "w/o Intercept" begin
-    prob = MVDAProblem(L, X, intercept=false)
-    test_on_dataset(prob, L, X, k)
+@testset "StandardSimplexEncoding" begin
+    @testset "w/ Intercept" begin
+        prob = MVDAProblem(L, X, encoding=:standard, intercept=true)
+        test_on_dataset(prob, L, X, k)
+    end
+
+    @testset "w/o Intercept" begin
+        prob = MVDAProblem(L, X, encoding=:standard, intercept=false)
+        test_on_dataset(prob, L, X, k)
+    end
 end

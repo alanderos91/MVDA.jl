@@ -1,12 +1,12 @@
 const Coefficients{T1,T2} = NamedTuple{(:slope,:intercept), Tuple{T1,T2}}
 
-allocate_coeff(::Type{T}, ::Nothing, n::Integer, p::Integer, c::Integer) where T<:AbstractFloat = (; slope=zeros(T, p, c-1), intercept=zeros(T, c-1))
-allocate_coeff(::Type{T}, ::Kernel, n::Integer, p::Integer, c::Integer) where T<:AbstractFloat = (; slope=zeros(T, n, c-1), intercept=zeros(T, c-1))
+allocate_coeff(::Type{T}, ::Nothing, n::Integer, p::Integer, k::Integer) where T<:AbstractFloat = (; slope=zeros(T, p, k), intercept=zeros(T, k))
+allocate_coeff(::Type{T}, ::Kernel, n::Integer, p::Integer, k::Integer) where T<:AbstractFloat = (; slope=zeros(T, n, k), intercept=zeros(T, k))
 
 const Residuals{T1,T2} = NamedTuple{(:loss,:dist), Tuple{T1,T2}}
 
-allocate_res(::Type{T}, ::Nothing, n::Integer, p::Integer, c::Integer) where T<:AbstractFloat = (; loss=zeros(T, n, c-1), dist=zeros(T, p, c-1))
-allocate_res(::Type{T}, ::Kernel, n::Integer, p::Integer, c::Integer) where T<:AbstractFloat = (; loss=zeros(T, n, c-1), dist=zeros(T, n, c-1))
+allocate_res(::Type{T}, ::Nothing, n::Integer, p::Integer, k::Integer) where T<:AbstractFloat = (; loss=zeros(T, n, k), dist=zeros(T, p, k))
+allocate_res(::Type{T}, ::Kernel, n::Integer, p::Integer, k::Integer) where T<:AbstractFloat = (; loss=zeros(T, n, k), dist=zeros(T, n, k))
 
 function create_X_and_K(kernel::Kernel, ::Type{T}, data) where T<:AbstractFloat
     X = copyto!(similar(data, T), data)
@@ -24,8 +24,8 @@ end
     MVDAProblem{T} where T<:AbstractFloat
 
 Representation of a vertex discriminant analysis problem using floating-point type `T`.
-Each unique class label is mapped to a unique vertex of a regular simplex. A `(c-1)`-simplex
-is used to encode `c` classes.
+Each unique class label is mapped to a unique vertex of a `(c-1)`-simplex, embedded in either `c` (`encoding=:standard`)
+or `c-1` (`encoding=:projected`) dimensions.
 
 **Note**: Matrix `X` is used as the design matrix in linear problems (`kernel isa Nothing`);
 otherwise the matrix `K` is used for the design (`kernel isa Kernel`).
@@ -97,18 +97,19 @@ struct MVDAProblem{T<:AbstractFloat,encT,kernT,labelT,matT,vecT}
 
         # Create the data matrices.
         X, K = create_X_and_K(kernel, T, data_X)
-        Y = similar(X, n, c-1)
+        nd = vertex_dimension(encoding)
+        Y = similar(X, n, nd)
         for (i, l) in enumerate(data_L)
             j = findfirst(isequal(l), labels)
             Y[i,:] = ind2label(j, encoding)
         end
 
         # Allocate coefficients, residuals, and gradients.
-        coeff = allocate_coeff(T, kernel, n, p, c)
-        coeff_prev = allocate_coeff(T, kernel, n, p, c)
-        coeff_proj = allocate_coeff(T, kernel, n, p, c)
-        res = allocate_res(T, kernel, n, p, c)
-        grad = allocate_coeff(T, kernel, n, p, c)
+        coeff = allocate_coeff(T, kernel, n, p, nd)
+        coeff_prev = allocate_coeff(T, kernel, n, p, nd)
+        coeff_proj = allocate_coeff(T, kernel, n, p, nd)
+        res = allocate_res(T, kernel, n, p, nd)
+        grad = allocate_coeff(T, kernel, n, p, nd)
 
         # Extract the missing type information.
         matT, vecT = typeof(coeff.slope), typeof(coeff.intercept)
@@ -134,21 +135,29 @@ samples/instances aligned along rows (e.g. `data[i,:]` is sample `i`).
 
 !!! note
 
-    Defaults to linear classifier, `kernel=nothing`.
+    Defaults to linear classifier, `kernel=nothing`, with a projected simplex encoding.
     Specifying a `Kernel` requires `using KernelFunctions` first.
 
 # Keyword Arguments
 
+- `encoding`: Specifies vertex encoding of classes (default=:projected).
 - `intercept`: Should the model include an intercept term?
 - `kernel`: How should the data be transformed?.
 """
 function MVDAProblem{T}(data_L, data_X;
+    encoding::Symbol=:standard,
     intercept::Bool=true,
-    kernel::Union{Nothing,Kernel}=nothing) where T
+    kernel::Union{Nothing,Kernel}=nothing) where {T,encT}
     #
     labels = sort!(unique(data_L))
     K = length(labels)
-    encoding = SimplexBased{Vector{T},K}()
+    if encoding == :standard
+        encoding = StandardSimplexEncoding{Vector{T},K}()
+    elseif encoding == :projected
+        encoding = ProjectedSimplexEncoding{Vector{T},K}()
+    else
+        error("Unknown vetex encoding option $(encoding); please use `encoding=:standard` or `encoding=:projected`.")
+    end
     MVDAProblem{T}(data_L, data_X, encoding, kernel, labels, intercept)
 end
 
@@ -250,10 +259,10 @@ See also: [`classify`](@ref)
 MLDataUtils.predict(problem::MVDAProblem, x) = predict(problem.kernel, problem, x)
 
 function MLDataUtils.predict(::Nothing, problem::MVDAProblem, x::AbstractVector)
-    @unpack c, coeff_proj, intercept = problem
+    @unpack c, coeff_proj, intercept, encoding = problem
     B, b0 = coeff_proj.slope, coeff_proj.intercept
     T = floattype(problem)
-    y = similar(x, T, c-1)
+    y = similar(x, T, vertex_dimension(encoding))
     if intercept
         copyto!(y, b0)
     else
@@ -264,11 +273,11 @@ function MLDataUtils.predict(::Nothing, problem::MVDAProblem, x::AbstractVector)
 end
 
 function MLDataUtils.predict(::Nothing, problem::MVDAProblem, X::AbstractMatrix)
-    @unpack c, coeff_proj, intercept = problem
+    @unpack c, coeff_proj, intercept, encoding = problem
     B, b0 = coeff_proj.slope, coeff_proj.intercept
     T = floattype(problem)
     n = size(X, 1)
-    Y = similar(X, T, n, c-1)
+    Y = similar(X, T, n, vertex_dimension(encoding))
     if intercept
         foreach(Base.Fix2(copyto!, b0), eachrow(Y))
     else
@@ -279,10 +288,10 @@ function MLDataUtils.predict(::Nothing, problem::MVDAProblem, X::AbstractMatrix)
 end
 
 function MLDataUtils.predict(kernel::Kernel, problem::MVDAProblem, x::AbstractVector)
-    @unpack c, coeff_proj, intercept = problem
+    @unpack c, coeff_proj, intercept, encoding = problem
     B, b0 = coeff_proj.slope, coeff_proj.intercept
     T = floattype(problem)
-    y = similar(x, T, c-1)
+    y = similar(x, T, vertex_dimension(encoding))
     K = kernelmatrix(kernel, problem.X, x', obsdim=1)
     if intercept
         copyto!(y, b0)
@@ -294,11 +303,11 @@ function MLDataUtils.predict(kernel::Kernel, problem::MVDAProblem, x::AbstractVe
 end
 
 function MLDataUtils.predict(kernel::Kernel, problem::MVDAProblem, X::AbstractMatrix)
-    @unpack c, coeff_proj, intercept = problem
+    @unpack c, coeff_proj, intercept, encoding = problem
     B, b0 = coeff_proj.slope, coeff_proj.intercept
     T = floattype(problem)
     n = size(X, 1)
-    Y = similar(X, T, n, c-1)
+    Y = similar(X, T, n, vertex_dimension(encoding))
     K = kernelmatrix(kernel, X, problem.X, obsdim=1)
     if intercept
         foreach(Base.Fix2(copyto!, b0), eachrow(Y))
