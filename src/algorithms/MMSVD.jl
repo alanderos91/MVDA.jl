@@ -13,7 +13,7 @@ function __mm_init__(::MMSVD, problem::MVDAProblem, ::Nothing)
     nparams = ifelse(problem.kernel isa Nothing, p, n)
 
     # projection
-    projection = StructuredL0Projection(nparams)
+    projection = HomogeneousL0Projection(nparams)
 
     # thin SVD of A
     F = svd(A, full=false)

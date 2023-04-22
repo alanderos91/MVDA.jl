@@ -13,7 +13,7 @@ function __mm_init__(::SD, problem::MVDAProblem, ::Nothing)
     nparams = ifelse(problem.kernel isa Nothing, p, n)
 
     # projection
-    projection = StructuredL0Projection(nparams)
+    projection = HomogeneousL0Projection(nparams)
 
     # constants
     Abar = vec(mean(A, dims=1))

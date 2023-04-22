@@ -112,14 +112,19 @@ function project_l0_ball!(itr::F1, f::F2, X::AbstractMatrix, k, scores::S, args.
     return X
 end
 
-struct StructuredL0Projection <: Function
+#
+#   HomogeneousL0Projection
+#
+#   Scores matrix rows or columns by their norms to induce sparsity.
+#
+struct HomogeneousL0Projection <: Function
     idx::Vector{Int}
     buffer::Vector{Int}
     scores::Vector{Float64}
 
-    function StructuredL0Projection(n::Int)
+    function HomogeneousL0Projection(n::Int)
         new(collect(1:n), Vector{Int}(undef, n), Vector{Float64}(undef, n))
     end
 end
 
-(P::StructuredL0Projection)(X::AbstractMatrix, k) = project_l0_ball!(X, k, P.scores, P.idx, P.buffer; obsdim=ObsDim.Constant{1}())
+(P::HomogeneousL0Projection)(X::AbstractMatrix, k) = project_l0_ball!(X, k, P.scores, P.idx, P.buffer; obsdim=ObsDim.Constant{1}())
