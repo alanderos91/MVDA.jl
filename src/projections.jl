@@ -77,16 +77,6 @@ function __threshold__!(x, abs_pivot)
     return nonzero_count
 end
 
-struct L0Projection <: Function
-    idx::Vector{Int}
-    buffer::Vector{Int}
-
-    function L0Projection(n::Int)
-        new(collect(1:n), Vector{Int}(undef, n))
-    end
-end
-
-(P::L0Projection)(x, k) = project_l0_ball!(x, k, P.idx, P.buffer)
 
 __iterateby__(::ObsDim.Constant{1}) = eachrow
 __iterateby__(::ObsDim.Constant{2}) = eachcol
@@ -113,9 +103,27 @@ function project_l0_ball!(itr::F1, f::F2, X::AbstractMatrix, k, scores::S, args.
 end
 
 #
+#   L0Projection
+#
+#   Induce sparsity on components of a vector. Treats matrices as vectors.
+#
+struct L0Projection <: Function
+    idx::Vector{Int}
+    buffer::Vector{Int}
+
+    function L0Projection(n::Int)
+        new(collect(1:n), Vector{Int}(undef, n))
+    end
+end
+
+(P::L0Projection)(x::AbstractVector, k) = project_l0_ball!(x, k, P.idx, P.buffer)
+(P::L0Projection)(x::AbstractMatrix, k) = project_l0_ball!(vec(x), k, P.idx, P.buffer)
+
+#
 #   HomogeneousL0Projection
 #
 #   Scores matrix rows or columns by their norms to induce sparsity.
+#   Assumes that categories are determined from the same set of features.
 #
 struct HomogeneousL0Projection <: Function
     idx::Vector{Int}
@@ -128,3 +136,25 @@ struct HomogeneousL0Projection <: Function
 end
 
 (P::HomogeneousL0Projection)(X::AbstractMatrix, k) = project_l0_ball!(X, k, P.scores, P.idx, P.buffer; obsdim=ObsDim.Constant{1}())
+
+#
+#   HeterogeneousL0Projection
+#
+#   Carries out L0Projection on each row or each column of a matrix.
+#   Assumes that categories are determined by distinct sets of features.
+#
+struct HeterogeneousL0Projection <: Function
+    projection::Vector{L0Projection}
+
+    function HeterogeneousL0Projection(ncategories::Int, nfeatures::Int)
+        new([L0Projection(nfeatures) for _ in 1:ncategories])
+    end
+end
+
+function (P::HeterogeneousL0Projection)(X::AbstractMatrix, k)
+    for (j, x) in enumerate(eachcol(X))
+        P_j = P.projection[j]
+        P_j(x, k)
+    end
+    return X
+end

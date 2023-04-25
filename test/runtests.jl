@@ -3,7 +3,7 @@ using LinearAlgebra, Random, StableRNGs, Parameters, Statistics
 using Test
 
 @testset "Projections" begin
-    @testset "L0" begin
+    @testset "L0Projection" begin
         # randomized
         for _ in 1:10
             number_components = 1000
@@ -30,6 +30,38 @@ using Test
             topk = sort!(x_proj[idx], lt=isless, by=abs, rev=true)
             @test topk == x_sorted[1:k]
         end
+    end
+
+    @testset "HomogeneousL0Projection" begin
+        ncategories = 8
+        nfeatures = 100
+        X = 10 * randn(nfeatures, ncategories)
+        k = 10
+        P = MVDA.HomogeneousL0Projection(nfeatures)
+        Xproj = P(copy(X), k)
+
+        norms = map(norm, eachrow(Xproj))
+        nzidx = findall(!isequal(0), norms)
+        @test length(nzidx) ≤ k
+        @test sort!(norms[nzidx], rev=true) == sort(norms, rev=true)[1:k]
+    end
+
+    @testset "HeterogeneousL0Projection" begin
+        ncategories = 8
+        nfeatures = 100
+        X = 10 * randn(nfeatures, ncategories)
+        k = 10
+        P = MVDA.HeterogeneousL0Projection(ncategories, nfeatures)
+        Xproj = P(copy(X), k)
+
+        correct_length, correct_subsets = true, true
+        for (x, xproj) in zip(eachcol(X), eachcol(Xproj))
+            nzidx = findall(xi -> xi != 0, xproj)
+            correct_length = length(nzidx) ≤ k && correct_length
+            correct_subsets = sort!(xproj[nzidx], by=abs, rev=true) == sort(x, by=abs, rev=true)[1:k] && correct_subsets
+        end
+        @test correct_length
+        @test correct_subsets
     end
 end
 
