@@ -96,6 +96,11 @@ ProjectedSimplexEncoding(::Type{T}, K::Integer) where T<:Number = ProjectedSimpl
 
 vertex_dimension(lm::ProjectedSimplexEncoding{T,K}) where {T,K} = K-1
 
+function maximum_deadzone(encoding::ProjectedSimplexEncoding)
+    c = length(encoding.vertex)
+    return 1//2 * sqrt(2*c/(c-1))
+end
+
 """
 Represent `K` classes with a the standard `K-1` simplex in `K`-space.
 """
@@ -118,3 +123,7 @@ StandardSimplexEncoding(K::Integer) = StandardSimplexEncoding{Vector{Float64},K}
 StandardSimplexEncoding(::Type{T}, K::Integer) where T<:Number = StandardSimplexEncoding{Vector{T},K}()
 
 vertex_dimension(lm::StandardSimplexEncoding{T,K}) where {T,K} = K
+
+function maximum_deadzone(::StandardSimplexEncoding)
+    return sqrt(2)/2
+end

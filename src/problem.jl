@@ -243,8 +243,9 @@ function Base.show(io::IO, problem::MVDAProblem)
 end
 
 function maximum_deadzone(problem::MVDAProblem)
-    c = problem.c
-    return 1//2 * sqrt(2*c/(c-1))
+    T = floattype(problem)
+    epsilon = maximum_deadzone(problem.encoding)
+    return T(epsilon)
 end
 
 """
@@ -343,7 +344,7 @@ function __classify__(problem::MVDAProblem, Y::AbstractMatrix)
     num_julia_threads = Threads.nthreads()
 
     if num_julia_threads == 1
-        buffer = similar(y)
+        buffer = similar(Y, size(Y, 2))
         for i in axes(Y, 1)
             y = view(Y, i, :)
             L[i] = __classify__(problem, y, buffer=buffer)
