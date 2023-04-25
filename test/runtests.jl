@@ -9,7 +9,7 @@ using Test
             number_components = 1000
             x = 10 * randn(number_components)
             k = 50
-            P = MVDA.L0Projection(number_components)
+            P = L0Projection(number_components)
             xproj = P(copy(x), k)
 
             nzidx = findall(xi -> xi != 0, xproj)
@@ -20,7 +20,7 @@ using Test
         # ties
         x = Float64[2, 1, 1, 1, 1, -0.6, 0.5, 0.5]
         shuffle!(StableRNG(1234), x)
-        P = MVDA.L0Projection(length(x))
+        P = L0Projection(length(x))
         x_sorted = sort(x, lt=isless, by=abs, rev=true, order=Base.Order.Forward)
         x_zero = P(copy(x), 0)
         @test x_zero == zeros(length(x))
@@ -37,7 +37,7 @@ using Test
         nfeatures = 100
         X = 10 * randn(nfeatures, ncategories)
         k = 10
-        P = MVDA.HomogeneousL0Projection(nfeatures)
+        P = HomogeneousL0Projection(nfeatures)
         Xproj = P(copy(X), k)
 
         norms = map(norm, eachrow(Xproj))
@@ -51,7 +51,7 @@ using Test
         nfeatures = 100
         X = 10 * randn(nfeatures, ncategories)
         k = 10
-        P = MVDA.HeterogeneousL0Projection(ncategories, nfeatures)
+        P = HeterogeneousL0Projection(ncategories, nfeatures)
         Xproj = P(copy(X), k)
 
         correct_length, correct_subsets = true, true

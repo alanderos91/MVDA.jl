@@ -127,5 +127,6 @@ include("cv.jl")
 export MVDAProblem, probdims, maximum_deadzone
 export MMSVD, SD
 export VerboseCallback
+export L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection
 
 end
