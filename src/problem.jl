@@ -145,7 +145,7 @@ samples/instances aligned along rows (e.g. `data[i,:]` is sample `i`).
 - `kernel`: How should the data be transformed?.
 """
 function MVDAProblem{T}(data_L, data_X;
-    encoding::Symbol=:standard,
+    encoding::Symbol=:projected,
     intercept::Bool=true,
     kernel::Union{Nothing,Kernel}=nothing) where {T,encT}
     #
