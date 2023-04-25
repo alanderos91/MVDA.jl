@@ -173,12 +173,12 @@ function test_on_dataset(prob, L, X, k)
                 randn!(rng, B)
                 copyto!(prob.coeff_prev.slope, B)
                 
-                (_, state0A) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=0, gtol=1e-3, nesterov=threshold)
-                (_, state0B) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=0, gtol=1e-3, nesterov=threshold)
-                (_, state1) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=1, gtol=1e-3, nesterov=threshold)
-                (_, state2) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=1, gtol=1e-3, nesterov=threshold)
-                (_, state100) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=98, gtol=1e-3, nesterov=threshold)
-                (_, statefinal) = MVDA.anneal!(algorithm, prob, ϵ, λ, ρ, s, maxiter=10^4, gtol=1e-4, nesterov=threshold)
+                (_, state0A) = MVDA.solve_unconstrained!(algorithm, prob, ϵ, λ, ρ, s, maxiter=0, gtol=1e-3, nesterov=threshold)
+                (_, state0B) = MVDA.solve_unconstrained!(algorithm, prob, ϵ, λ, ρ, s, maxiter=0, gtol=1e-3, nesterov=threshold)
+                (_, state1) = MVDA.solve_unconstrained!(algorithm, prob, ϵ, λ, ρ, s, maxiter=1, gtol=1e-3, nesterov=threshold)
+                (_, state2) = MVDA.solve_unconstrained!(algorithm, prob, ϵ, λ, ρ, s, maxiter=1, gtol=1e-3, nesterov=threshold)
+                (_, state100) = MVDA.solve_unconstrained!(algorithm, prob, ϵ, λ, ρ, s, maxiter=98, gtol=1e-3, nesterov=threshold)
+                (_, statefinal) = MVDA.solve_unconstrained!(algorithm, prob, ϵ, λ, ρ, s, maxiter=10^4, gtol=1e-4, nesterov=threshold)
     
                 @test state0A.objective == state0B.objective # no iterations
                 @test state0A.objective > state1.objective   # decrease after 1 iteration

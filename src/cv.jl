@@ -89,7 +89,7 @@ Split data in `problem` into cross-validation and a test sets, then run CV over 
   (default uses misclassification error).
 - `show_progress`: Toggles progress bar.
   
-  Additional arguments are propagated to `fit!` and `anneal!`. See also [`MVDA.fit`](@ref) and [`MVDA.anneal`](@ref).
+  Additional arguments are propagated to `solve_constrained!` and `solve_unconstrained!`. See also [`MVDA.solve_constrained!`](@ref) and [`MVDA.solve_unconstrained!`](@ref).
 """
 function cv_path(
     algorithm::AbstractMMAlg,
@@ -149,11 +149,11 @@ function cv_path(
         for (i, s) in enumerate(s_grid)
             # Fit model.
             if iszero(s)
-                timed_result = @timed MVDA.fit!(
+                timed_result = @timed MVDA.solve!(
                     algorithm, train_problem, epsilon, lambda, extras; kwargs...
                 )
             else
-                timed_result = @timed MVDA.fit!(
+                timed_result = @timed MVDA.solve_constrained!(
                     algorithm, train_problem, epsilon, lambda, s, extras; rho_init=rho, kwargs...
                 )
             end
@@ -267,7 +267,7 @@ function __cv_tune_loop__(::Kernel, fit_args::T1, grids::T2, data_subsets::T3, m
 
         for (i, epsilon) in enumerate(e_grid), (j, lambda) in enumerate(l_grid)
             # Fit model.
-            timed_result = @timed MVDA.fit!(
+            timed_result = @timed MVDA.solve!(
                 algorithm, train_problem, epsilon, lambda, extras; kwargs...
             )
                 
@@ -306,7 +306,7 @@ function __cv_tune_loop__(::Nothing, fit_args::T1, grids::T2, data_subsets::T3, 
 
     for (i, epsilon) in enumerate(e_grid), (j, lambda) in enumerate(l_grid)
         # Fit model.
-        timed_result = @timed MVDA.fit!(
+        timed_result = @timed MVDA.solve!(
             algorithm, train_problem, epsilon, lambda, extras; kwargs...
         )
             
@@ -332,7 +332,7 @@ function fit_tuned_model(algorithm, settings, (epsilon, lambda, gamma, sparsity)
     problem = MVDAProblem(train_set[1], train_set[2], settings)
 
     if iszero(sparsity)
-        timed_result = @timed MVDA.fit!(algorithm, problem, epsilon, lambda;
+        timed_result = @timed MVDA.solve!(algorithm, problem, epsilon, lambda;
             callback=callback,
             kwargs...
         )
@@ -340,7 +340,7 @@ function fit_tuned_model(algorithm, settings, (epsilon, lambda, gamma, sparsity)
             next!(progress_bar, showvalues=[(:model, "reduced")])
         end
         else
-        timed_result = @timed MVDA.fit!(algorithm, problem, epsilon, lambda, sparsity;
+        timed_result = @timed MVDA.solve_constrained!(algorithm, problem, epsilon, lambda, sparsity;
             callback=callback,
             kwargs...
         )

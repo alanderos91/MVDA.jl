@@ -63,7 +63,7 @@ using MVDA
 
 df = MVDA.dataset("iris")
 L, X = Vector(df[!,1]), Matrix{Float64}(df[!,2:end]) # targets/labels are always on first column
-problem = MVDAProblem(targets, X) # initialize; n samples, p features, c classes
+problem = MVDAProblem(L, X) # initialize; n samples, p features, c classes
 
 n, p, c = MVDA.probdims(problem) # get dimensions
 ```
@@ -72,50 +72,51 @@ n, p, c = MVDA.probdims(problem) # get dimensions
 
 ```julia
 problem.X               # n × p data/design matrix
-problem.Y               # n × c-1 response embedded in vertex space
+problem.Y               # response embedded in vertex space
 
 problem.intercept       # Boolean value indicating whether to estimate an intercept [default=true]
 problem.kernel          # Object representing the choice of kernel [default=nothing]
 
 problem.encoding        # object representing encoding of classes in vertex space
 problem.encoding.vertex # list of vertices in the encoding
-problem.label2vertex    # associative map: targets/labels to rows of Y
+problem.labels          # ordered list of labels corresponding to vertices
 
 # the fields coeff, coeff_prev, proj, and grad have the subfields `slope` and `intercept`:
 
-problem.coeff.slope     # p × c-1 coefficient matrix
-problem.coeff.intercept # c-1 × 1 intercept in vertex space; only used if `intercept = true`
+problem.coeff.slope     # coefficient matrix
+problem.coeff.intercept # intercept in vertex space; only used if `intercept = true`
 
 problem.coeff_prev      # same as problem.coeff, but used for Nesterov acceleration
 
-problem.proj            # same as problem.coeff, but stores sparse projection
+problem.coeff_proj      # same as problem.coeff, but stores sparse projection
 
 problem.grad            # same as problem.coeff, but stores gradient with respect to coefficients
 
 # residuals are split into 2 fields: main, dist, and weighted
 
-problem.res.loss        # n × c-1; used to store scaled residuals Y - X*B
-problem.res.dist        # p × c-1; used to store residuals P(B) - B
+problem.res.loss        # store residuals Y - X*B
+problem.res.dist        # store residuals P(B) - B
 ```
 
 </details>
 
 ## Fitting a model
 
-The functions `MVDA.fit!` and `MVDA.anneal!` are the workhorses of this package.
+The functions `MVDA.solve!`, `MVDA.solve_constrained!`, and `MVDA.solve_unconstrained!` are the workhorses of this package.
 
-* `MVDA.fit!` solves the penalized problem along the annealing path; that is, as `ρ` approaches infinity. This handles *outer* iterations.
-* `MVDA.anneal!` solves the penalized problem for a particular value of `ρ`. This handles *inner* iterations of a proximal distance algorithm.
+* `MVDA.solve!` solves a $\ell_{2}$-regularized VDA problem.
+* `MVDA.solve_constrained!` solves a (sparsity) constrained problem via a sequence of penalized problems. This handles *outer* iterations of a proximal distance algorithm.
+* `MVDA.solve_unconstrained!` solves a distance penalized problem for a particular value of `ρ`; i.e. an unconstrained problem. This handles *inner* iterations of a proximal distance algorithm.
 
 The default annealing schedule is $\rho(t) = \min\{\rho_{\max}, \rho_{0} 1.2^{t}\}$ at outer iteration $t$, with $\rho_{0} = 1$ and $\rho_{\max} = 10^{8}$.
 
 Optional arguments are specified with `<option>=<value>` pairs; examples highlighted below.
 
-**Note!!!** The first call to `MVDA.fit!` or `MVDA.anneal!` will incur a precompilation step.
+**Note!!!** The first call to `MVDA.solve!`, `MVDA.solve_constrained!`, or `MVDA.solve_unconstrained!` will incur a precompilation step.
 Subsequent calls to the same function will typically run faster than the initial call, provided similar *types* of arguments are used.
 The timing results for `@time` assume precompilation has already taken place.
 
-### Examples with `MVDA.fit!`: No sparsity
+### Examples with `MVDA.solve!`: No sparsity
 
 <details>
 <summary>Click to expand</summary>
@@ -134,7 +135,7 @@ n, p, c = MVDA.probdims(problem)
 epsilon = MVDA.maximum_deadzone(problem)    # use maximum radius for non-overlapping deadzones
 lambda = 1.0                                # regularization strength
 
-((iters, result), final_rho) = @time MVDA.fit!(MMSVD(), problem, epsilon, lambda,
+((iters, result), final_rho) = @time MVDA.solve!(MMSVD(), problem, epsilon, lambda,
     maxiter=10^4,   # maximum number of inner iterations (affects convergence for ρ fixed)
     gtol=1e-3,      # control quality of solutions for fixed rho, i.e. |∇f(B)| < 1e-3
     nesterov=10,          # minimum number of steps to take WITHOUT Nesterov accel.
@@ -179,7 +180,7 @@ problem.coeff.intercept # estimate of intercept
 
 </details>
 
-### Example with `MVDA.fit!`: Sparsity version
+### Example with `MVDA.solve_constrained!`: Sparsity version
 
 <details>
 <summary>Click to expand</summary>
@@ -198,7 +199,7 @@ epsilon = MVDA.maximum_deadzone(problem)    # use maximum radius for non-overlap
 lambda = 1.0                                # regularization strength
 sparsity = 0.25                             # drop 1 feature
 
-((iters, result), final_rho) = @time MVDA.fit!(MMSVD(), problem, epsilon, lambda, sparsity,
+((iters, result), final_rho) = @time MVDA.solve_constrained!(MMSVD(), problem, epsilon, lambda, sparsity,
     maxrhov=100,    # maximum number of outer iterations (ρ to try)
     maxiter=10^4,   # maximum number of inner iterations (affects convergence for ρ fixed)
     dtol=1e-6,      # control quality of distance squared, i.e. dist(B,S) < 1e-6
@@ -248,7 +249,7 @@ problem.coeff_proj.intercept    # estimate of intercept
 
 </details>
 
-### Example with `MVDA.anneal!`
+### Example with `MVDA.solve_unconstrained!`
 
 <details>
 <summary>Click to expand</summary>
@@ -268,7 +269,7 @@ lambda = 1.0                                # regularization strength
 sparsity = 0.25                             # drop 1 feature
 rho = 1.0                                   # distance penalty strength
 
-(iters, result) = @time MVDA.anneal!(MMSVD(), problem, epsilon, lambda, sparsity, rho,
+(iters, result) = @time MVDA.solve_unconstrained!(MMSVD(), problem, epsilon, lambda, sparsity, rho,
     maxiter=10^4,   # maximum number of inner iterations (affects convergence for ρ fixed)
     gtol=1e-3,      # control quality of solutions for fixed rho, i.e. |∇f(B)| < 1e-3
     nesterov=10,    # minimum number of steps to take WITHOUT Nesterov accel.
@@ -390,7 +391,7 @@ In addition, `MVDA.repeated_cv` can be used to generate multiple replicates of c
 This function splits data into cross validation and test sets. The cross validation set is used to tune hyperparameters and thus further split to training and validation subsets.
 We permute the cross validation set in each replicate, but the test set is fixed.
 
-This function accepts the same keyword arguments as `MVDA.cv` and `MVDA.fit!`.
+This function accepts the same keyword arguments as `MVDA.cv` and `MVDA.solve_constrained!`.
 
 <details>
 <summary> Example of repeated k-fold cross validation</summary>
@@ -459,7 +460,7 @@ epsilon = MVDA.maximum_deadzone(problem)    # use maximum radius for non-overlap
 sparsity = 0.5                              # target 50% nonzero weights/coefficients
 lambda = 1.0                                # regularization strength
 
-((iters, result), final_rho) = @time MVDA.fit!(MMSVD(), problem, epsilon, lambda, sparsity,
+((iters, result), final_rho) = @time MVDA.solve_constrained!(MMSVD(), problem, epsilon, lambda, sparsity,
     maxrhov=100,    # maximum number of outer iterations (ρ to try)
     maxiter=10^4,   # maximum number of inner iterations (affects convergence for ρ fixed)
     dtol=1e-3,      # control quality of distance squared, i.e. dist(B,S) < 1e-3

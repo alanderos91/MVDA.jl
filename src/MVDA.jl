@@ -17,7 +17,6 @@ using Polyester
 import Base: show, iterate
 import MLDataUtils: classify, predict, ind2label, label2ind, isposlabel, isneglabel, islabelenc
 import MLLabelUtils: VectorLabelEncoding
-import StatsBase: fit, fit!
 
 ##### DATA #####
 

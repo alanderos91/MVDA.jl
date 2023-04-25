@@ -1,9 +1,9 @@
 """
-```init!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
+```solve!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
 
-Initialize a `problem` with its `λ`-regularized solution.
+Fit an ℓ₂ regularized VDA model with hyperparameters (ϵ, λ).
 """
-function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda, _extras_::T=nothing;
+function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda, _extras_::T=nothing;
     maxiter::Int=DEFAULT_MAXITER,
     gtol::Real=DEFAULT_GTOL,
     nesterov::Int=DEFAULT_NESTEROV,
@@ -62,9 +62,9 @@ function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon,
 end
 
 """
-    fit!(algorithm, problem, ϵ, s, [extras], [update_extras]; kwargs...)
+    solve_constrained!(algorithm, problem, ϵ, λ, s, [extras], [update_extras]; kwargs...)
 
-Same as `fit_MVDA(algorithm, problem, ϵ, s)`, but with preallocated data structures in `extras`.
+Fit a sparse VDA model with hyperparameters (ϵ, λ, s) by solving a sequence of unconstrained problems.
 
 !!! Note
     The caller should specify whether to update data structures depending on `s` and `ρ` using `update_extras[1]` and `update_extras[2]`, respectively.
@@ -85,9 +85,9 @@ Same as `fit_MVDA(algorithm, problem, ϵ, s)`, but with preallocated data struct
 - `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 
-See also: [`MVDA.anneal!`](@ref) for additional keyword arguments applied at the annealing step.
+See also: [`MVDA.solve_unconstrained!`](@ref) for additional keyword arguments applied at the annealing step.
 """
-function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real,
+function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real,
     _extras_::T=nothing;
     maxrhov::Int=DEFAULT_MAXRHOV,
     dtol::Real=DEFAULT_DTOL,
@@ -122,7 +122,7 @@ function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon:
 
     for iter in 1:maxrhov
         # Solve minimization problem for fixed rho.
-        (inner_iters, state) = anneal!(algorithm, problem, epsilon, lambda, s, rho, extras;
+        (inner_iters, state) = solve_unconstrained!(algorithm, problem, epsilon, lambda, s, rho, extras;
             callback=callback,
             kwargs...,
         )
@@ -150,9 +150,9 @@ function StatsBase.fit!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon:
 end
 
 """
-    anneal!(algorithm, problem, ϵ, ρ, s, [extras], [update_extras]; kwargs...)
+    solve_unconstrained!(algorithm, problem, ϵ, λ, s, ρ, [extras], [update_extras]; kwargs...)
 
-Same as `anneal(algorithm, problem, ϵ, ρ, s)`, but with preallocated data structures in `extras`.
+Fit a distance-penalized VDA model with penalty strength ρ.
 
 !!! Note
     The caller should specify whether to update data structures depending on `s` and `ρ` using `update_extras[1]` and `update_extras[2]`, respectively.
@@ -170,7 +170,7 @@ Same as `anneal(algorithm, problem, ϵ, ρ, s)`, but with preallocated data stru
 - `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 """
-function anneal!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real, rho::Real,
+function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real, rho::Real,
     _extras_::T=nothing;
     maxiter::Int=10^4,
     gtol::Real=1e-6,
