@@ -106,6 +106,7 @@ abstract type AbstractMMAlg end
 
 include(joinpath("algorithms", "SD.jl"))
 include(joinpath("algorithms", "MMSVD.jl"))
+include(joinpath("algorithms", "PGD.jl"))
 # include(joinpath("algorithms", "CyclicVDA.jl"))
 
 const DEFAULT_MAXITER = 10^3
@@ -125,7 +126,7 @@ include("fit.jl")
 include("cv.jl")
 
 export MVDAProblem, probdims, maximum_deadzone
-export MMSVD, SD
+export MMSVD, SD, PGD
 export VerboseCallback
 export L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection
 

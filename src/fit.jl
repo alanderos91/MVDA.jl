@@ -229,3 +229,68 @@ function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, ep
 
     return (iters, state)
 end
+
+
+function solve_constrained!(algorithm::PGD, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real,
+    _extras_::T=nothing;
+    projection_type::Type=HomogeneousL0Projection,
+    maxiter::Int=10^4,
+    gtol::Real=DEFAULT_GTOL,
+    rtol::Real=DEFAULT_RTOL,
+    rho_init::Real=DEFAULT_RHO_INIT,
+    nesterov::Int=10,
+    callback::F=DEFAULT_CALLBACK,
+    kwargs...) where{T,F}
+    # Check for missing data structures.
+    extras = __mm_init__(algorithm, projection_type, problem, _extras_)
+
+    # Get problem info and extra data structures.
+    @unpack coeff, coeff_prev, coeff_proj = problem
+    @unpack projection = extras
+
+    # Initialize ρ and iteration count.
+    rho, iters = rho_init, 0
+
+    # Fix hyperparameters.
+    k = sparsity_to_k(problem, s)
+    hyperparams = (;epsilon=epsilon, lambda=lambda, rho=rho, k=k)
+    
+    # Update data structures due to hyperparameters.
+    __mm_update_lambda__(algorithm, problem, extras, lambda, zero(rho))
+
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+    callback((0, state), problem, hyperparams)
+    old = state.objective
+
+    # Initialize iteration counts.
+    iters = 0
+    nesterov_iter = 1
+    for iter in 1:maxiter
+        iters += 1
+
+        # Apply an algorithm map to update estimates.
+        __mm_iterate__(algorithm, problem, extras, epsilon, lambda, rho, k)
+
+        # Update loss, objective, distance, and gradient.
+        state = evaluate_objective!(problem, extras, epsilon, lambda)
+        callback((iter, state), problem, hyperparams)
+
+        # Assess convergence.
+        obj = state.objective
+        if state.gradient < gtol || abs(obj - old) < rtol * (1 + abs(old))
+            break
+        elseif iter < maxiter
+            needs_reset = iter < nesterov || obj > old
+            nesterov_iter = nesterov_acceleration!(coeff, coeff_prev, nesterov_iter, needs_reset)
+            old = obj
+        end
+    end
+    # Save parameter estimates in case of warm start.
+    copyto!(coeff_proj.slope, coeff.slope)
+    copyto!(coeff_proj.intercept, coeff.intercept)
+    copyto!(coeff_prev.slope, coeff.slope)
+    copyto!(coeff_prev.intercept, coeff.intercept)
+
+    return ((iters, state), rho)
+end
