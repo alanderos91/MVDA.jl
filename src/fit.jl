@@ -11,7 +11,7 @@ function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda,
     kwargs...,
     ) where {T,F}
     # Check for missing data structures.
-    extras = __mm_init__(algorithm, problem, _extras_)
+    extras = __mm_init__(algorithm, Nothing, problem, _extras_)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, coeff_proj = problem
@@ -72,7 +72,7 @@ Fit a sparse VDA model with hyperparameters (ϵ, λ, s) by solving a sequence of
     Convergence is determined based on the rule `dist < dtol || abs(dist - old) < rtol * (1 + old)`, where `dist` is the squared distance and `dtol` and `rtol` are tolerance parameters.
 
 !!! Tip
-    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, problem, nothing)`.
+    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, projection_type, problem, nothing)`.
 
 # Keyword Arguments
 
@@ -89,6 +89,7 @@ See also: [`MVDA.solve_unconstrained!`](@ref) for additional keyword arguments a
 """
 function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real,
     _extras_::T=nothing;
+    projection_type::Type=HomogeneousL0Projection,
     maxrhov::Int=DEFAULT_MAXRHOV,
     dtol::Real=DEFAULT_DTOL,
     rtol::Real=DEFAULT_RTOL,
@@ -98,7 +99,7 @@ function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsi
     callback::F=DEFAULT_CALLBACK,
     kwargs...) where{T,F}
     # Check for missing data structures.
-    extras = __mm_init__(algorithm, problem, _extras_)
+    extras = __mm_init__(algorithm, projection_type, problem, _extras_)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, coeff_proj = problem
@@ -124,6 +125,7 @@ function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsi
         # Solve minimization problem for fixed rho.
         (inner_iters, state) = solve_unconstrained!(algorithm, problem, epsilon, lambda, s, rho, extras;
             callback=callback,
+            projection_type=projection_type,
             kwargs...,
         )
 
@@ -160,7 +162,7 @@ Fit a distance-penalized VDA model with penalty strength ρ.
     Convergence is determined based on the rule `gradsq < gtol`, where `gradsq` is squared Euclidean norm of the gradient and `gtol` is a tolerance parameter.
 
 !!! Tip
-    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, problem, nothing)`.
+    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, projection_type, problem, nothing)`.
 
 # Keyword Arguments
 
@@ -172,13 +174,14 @@ Fit a distance-penalized VDA model with penalty strength ρ.
 """
 function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real, rho::Real,
     _extras_::T=nothing;
+    projection_type::Type=HomogeneousL0Projection,
     maxiter::Int=10^4,
     gtol::Real=1e-6,
     nesterov::Int=10,
     callback::F=DEFAULT_CALLBACK,
     ) where {T,F}
     # Check for missing data structures.
-    extras = __mm_init__(algorithm, problem, _extras_)
+    extras = __mm_init__(algorithm, projection_type, problem, _extras_)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, coeff_proj = problem

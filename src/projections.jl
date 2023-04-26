@@ -158,3 +158,11 @@ function (P::HeterogeneousL0Projection)(X::AbstractMatrix, k)
     end
     return X
 end
+
+#
+#   make_projection()
+#
+make_projection(::Type{Nothing}, p, c) = nothing
+make_projection(::Type{L0Projection}, p, c) = L0Projection(p)
+make_projection(::Type{HomogeneousL0Projection}, p, c) = HomogeneousL0Projection(p)
+make_projection(::Type{HeterogeneousL0Projection}, p, c) = HeterogeneousL0Projection(c, p)

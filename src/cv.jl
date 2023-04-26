@@ -98,6 +98,7 @@ function cv_path(
     lambda::Real,
     s_grid::G,
     data::D=get_dataset(problem);
+    projection_type::Type=HomogeneousL0Projection,
     nfolds::Int=5,
     scoref::S=DEFAULT_SCORE_FUNCTION,
     show_progress::Bool=true,
@@ -135,7 +136,7 @@ function cv_path(
         
         # Create a problem object for the training set.
         train_problem = MVDAProblem(train_L, train_X, problem)
-        extras = __mm_init__(algorithm, train_problem, nothing)
+        extras = __mm_init__(algorithm, projection_type, train_problem, nothing)
         param_sets = (train_problem.coeff, train_problem.coeff_prev, train_problem.coeff_proj)
         
         # Set initial model parameters.
@@ -154,7 +155,10 @@ function cv_path(
                 )
             else
                 timed_result = @timed MVDA.solve_constrained!(
-                    algorithm, train_problem, epsilon, lambda, s, extras; rho_init=rho, kwargs...
+                    algorithm, train_problem, epsilon, lambda, s, extras;
+                    projection_type=projection_type,
+                    rho_init=rho, 
+                    kwargs...
                 )
             end
             
@@ -257,7 +261,7 @@ function __cv_tune_loop__(::Kernel, fit_args::T1, grids::T2, data_subsets::T3, m
         # Create a problem object for the training set.
         new_kernel = ScaledKernel(problem.kernel, gamma)
         train_problem = MVDAProblem(train_L, train_X, problem, new_kernel)
-        extras = __mm_init__(algorithm, train_problem, nothing)
+        extras = __mm_init__(algorithm, Nothing, train_problem, nothing)
         param_sets = (train_problem.coeff, train_problem.coeff_prev, train_problem.coeff_proj)
 
         # Set initial model parameters.
@@ -286,14 +290,14 @@ end
 
 function __cv_tune_loop__(::Nothing, fit_args::T1, grids::T2, data_subsets::T3, mutables::T4, k::Integer) where {T1,T2,T3,T4}
     #
-    algorithm, problem, scoref, kwargs = fit_args
-    e_grid, l_grid, _ = grids
+    (algorithm, problem, scoref, kwargs) = fit_args
+    (e_grid, l_grid, _) = grids
     (train_L, train_X), (val_L, val_X) = data_subsets
     (result, progress_bar) = mutables
 
     # Create a problem object for the training set.
     train_problem = MVDAProblem(train_L, train_X, problem)
-    extras = __mm_init__(algorithm, train_problem, nothing)
+    extras = __mm_init__(algorithm, Nothing, train_problem, nothing)
     param_sets = (train_problem.coeff, train_problem.coeff_prev, train_problem.coeff_proj)
 
     gamma = 0.0
