@@ -259,7 +259,7 @@ function solve_constrained!(algorithm::PGD, problem::MVDAProblem, epsilon::Real,
     __mm_update_lambda__(algorithm, problem, extras, lambda, zero(rho))
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+    state = evaluate_objective_pgd!(problem, extras, epsilon, lambda, 1.0)
     callback((0, state), problem, hyperparams)
     old = state.objective
 
@@ -270,15 +270,19 @@ function solve_constrained!(algorithm::PGD, problem::MVDAProblem, epsilon::Real,
         iters += 1
 
         # Apply an algorithm map to update estimates.
-        __mm_iterate__(algorithm, problem, extras, epsilon, lambda, rho, k)
+        t = __mm_iterate__(algorithm, problem, extras, epsilon, lambda, rho, k)
 
         # Update loss, objective, distance, and gradient.
-        state = evaluate_objective!(problem, extras, epsilon, lambda)
+        state = evaluate_objective_pgd!(problem, extras, epsilon, lambda, t)
         callback((iter, state), problem, hyperparams)
 
         # Assess convergence.
         obj = state.objective
-        if state.gradient < gtol || abs(obj - old) < rtol * (1 + abs(old))
+        maxcoeff = norm(coeff_prev.slope, Inf)
+        if problem.intercept
+            maxcoeff = max(maxcoeff, norm(coeff_prev.slope, Inf))
+        end
+        if state.gradient < gtol || state.gradient < rtol*(1+maxcoeff)
             break
         elseif iter < maxiter
             needs_reset = iter < nesterov || obj > old

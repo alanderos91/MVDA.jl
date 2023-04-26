@@ -63,6 +63,8 @@ function __steepest_descent__(problem::MVDAProblem, extras, alpha, beta)
     # Move in the direction of steepest descent.
     BLAS.axpy!(-t, G, coeff.slope)
     intercept && BLAS.axpy!(-t, g0, coeff.intercept)
+
+    return t
 end
 
 # Apply one update in distance penalized problem.
