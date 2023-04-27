@@ -4,7 +4,7 @@ Solve via a sequence of linear system solves. Uses SVD of design matrix.
 struct MMSVD <: AbstractMMAlg end
 
 # Initialize data structures.
-function __mm_init__(::MMSVD, projection_type, problem::MVDAProblem, ::Nothing)
+function __mm_init__(::MMSVD, (projection_type, rng), problem::MVDAProblem, ::Nothing)
     @unpack coeff = problem
     A = design_matrix(problem)
     n, p, c = probdims(problem)
@@ -13,7 +13,7 @@ function __mm_init__(::MMSVD, projection_type, problem::MVDAProblem, ::Nothing)
     nparams = ifelse(problem.kernel isa Nothing, p, n)
 
     # projection
-    projection = make_projection(projection_type, nparams, c)
+    projection = make_projection(projection_type, rng, nparams, c)
 
     # thin SVD of A
     F = svd(A, full=false)
@@ -35,7 +35,7 @@ function __mm_init__(::MMSVD, projection_type, problem::MVDAProblem, ::Nothing)
 end
 
 # Assume extras has the correct data structures.
-__mm_init__(::MMSVD, projection_type, problem::MVDAProblem, extras) = extras
+__mm_init__(::MMSVD, (projection_type, rng), problem::MVDAProblem, extras) = extras
 
 # Update data structures due to changing ρ.
 __mm_update_rho__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem, lambda, rho)

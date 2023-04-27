@@ -3,6 +3,7 @@ Project `x` onto sparsity set with `k` non-zero elements.
 Assumes `idx` enters as a vector of indices into `x`.
 """
 function project_l0_ball!(x::AbstractVector, k::Integer,
+    rng::AbstractRNG=Random.GLOBAL_RNG,
     idx::T=collect(eachindex(x)),
     buffer::T=similar(idx)) where T <: AbstractVector{<:Integer}
     #
@@ -26,7 +27,7 @@ function project_l0_ball!(x::AbstractVector, k::Integer,
         number_to_drop = nonzero_count - k
         _indexes_ = findall(is_equal_magnitude(pivot), x)
         _buffer_ = view(buffer, 1:number_to_drop)
-        sample!(_indexes_, _buffer_, replace=false)
+        sample!(rng, _indexes_, _buffer_, replace=false)
         @inbounds for i in _buffer_
             x[i] = 0
         end
@@ -107,17 +108,18 @@ end
 #
 #   Induce sparsity on components of a vector. Treats matrices as vectors.
 #
-struct L0Projection <: Function
+struct L0Projection{RNG}
+    rng::RNG
     idx::Vector{Int}
     buffer::Vector{Int}
 
-    function L0Projection(n::Int)
-        new(collect(1:n), Vector{Int}(undef, n))
+    function L0Projection(rng::RNG, n::Int) where RNG <: AbstractRNG
+        new{RNG}(rng, collect(1:n), Vector{Int}(undef, n))
     end
 end
 
-(P::L0Projection)(x::AbstractVector, k) = project_l0_ball!(x, k, P.idx, P.buffer)
-(P::L0Projection)(x::AbstractMatrix, k) = project_l0_ball!(vec(x), k, P.idx, P.buffer)
+(P::L0Projection)(x::AbstractVector, k) = project_l0_ball!(x, k, P.rng, P.idx, P.buffer)
+(P::L0Projection)(x::AbstractMatrix, k) = project_l0_ball!(vec(x), k, P.rng, P.idx, P.buffer)
 
 #
 #   HomogeneousL0Projection
@@ -125,17 +127,18 @@ end
 #   Scores matrix rows or columns by their norms to induce sparsity.
 #   Assumes that categories are determined from the same set of features.
 #
-struct HomogeneousL0Projection <: Function
+struct HomogeneousL0Projection{RNG}
+    rng::RNG
     idx::Vector{Int}
     buffer::Vector{Int}
     scores::Vector{Float64}
 
-    function HomogeneousL0Projection(n::Int)
-        new(collect(1:n), Vector{Int}(undef, n), Vector{Float64}(undef, n))
+    function HomogeneousL0Projection(rng::RNG, n::Int) where RNG <: AbstractRNG
+        new{RNG}(rng, collect(1:n), Vector{Int}(undef, n), Vector{Float64}(undef, n))
     end
 end
 
-(P::HomogeneousL0Projection)(X::AbstractMatrix, k) = project_l0_ball!(X, k, P.scores, P.idx, P.buffer; obsdim=ObsDim.Constant{1}())
+(P::HomogeneousL0Projection)(X::AbstractMatrix, k) = project_l0_ball!(X, k, P.scores, P.rng, P.idx, P.buffer; obsdim=ObsDim.Constant{1}())
 
 #
 #   HeterogeneousL0Projection
@@ -143,11 +146,13 @@ end
 #   Carries out L0Projection on each row or each column of a matrix.
 #   Assumes that categories are determined by distinct sets of features.
 #
-struct HeterogeneousL0Projection <: Function
-    projection::Vector{L0Projection}
+struct HeterogeneousL0Projection{RNG}
+    rng::RNG
+    projection::Vector{L0Projection{RNG}}
 
-    function HeterogeneousL0Projection(ncategories::Int, nfeatures::Int)
-        new([L0Projection(nfeatures) for _ in 1:ncategories])
+    function HeterogeneousL0Projection(rng::RNG, ncategories::Int, nfeatures::Int) where RNG <: AbstractRNG
+        # keep reference to underlying RNG; note that it is shared across each projection operator!
+        new{RNG}(rng, [L0Projection(rng, nfeatures) for _ in 1:ncategories])
     end
 end
 
@@ -162,7 +167,7 @@ end
 #
 #   make_projection()
 #
-make_projection(::Type{Nothing}, p, c) = nothing
-make_projection(::Type{L0Projection}, p, c) = L0Projection(p)
-make_projection(::Type{HomogeneousL0Projection}, p, c) = HomogeneousL0Projection(p)
-make_projection(::Type{HeterogeneousL0Projection}, p, c) = HeterogeneousL0Projection(c, p)
+make_projection(::Type{Nothing}, rng, p, c) = nothing
+make_projection(::Type{L0Projection}, rng, p, c) = L0Projection(rng, p)
+make_projection(::Type{HomogeneousL0Projection}, rng, p, c) = HomogeneousL0Projection(rng, p)
+make_projection(::Type{HeterogeneousL0Projection}, rng, p, c) = HeterogeneousL0Projection(rng, c, p)

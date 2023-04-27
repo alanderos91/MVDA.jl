@@ -11,7 +11,7 @@ function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda,
     kwargs...,
     ) where {T,F}
     # Check for missing data structures.
-    extras = __mm_init__(algorithm, Nothing, problem, _extras_)
+    extras = __mm_init__(algorithm, (Nothing, nothing), problem, _extras_)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, coeff_proj = problem
@@ -72,7 +72,7 @@ Fit a sparse VDA model with hyperparameters (ϵ, λ, s) by solving a sequence of
     Convergence is determined based on the rule `dist < dtol || abs(dist - old) < rtol * (1 + old)`, where `dist` is the squared distance and `dtol` and `rtol` are tolerance parameters.
 
 !!! Tip
-    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, projection_type, problem, nothing)`.
+    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, (rng, projection_type), problem, nothing)`.
 
 # Keyword Arguments
 
@@ -97,9 +97,10 @@ function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsi
     rho_max::Real=DEFAULT_RHO_MAX,
     rhof::Function=DEFAULT_ANNEALING,
     callback::F=DEFAULT_CALLBACK,
+    rng::AbstractRNG=Random.GLOBAL_RNG,
     kwargs...) where{T,F}
     # Check for missing data structures.
-    extras = __mm_init__(algorithm, projection_type, problem, _extras_)
+    extras = __mm_init__(algorithm, (projection_type, rng), problem, _extras_)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, coeff_proj = problem
@@ -126,6 +127,7 @@ function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsi
         (inner_iters, state) = solve_unconstrained!(algorithm, problem, epsilon, lambda, s, rho, extras;
             callback=callback,
             projection_type=projection_type,
+            rng=rng,
             kwargs...,
         )
 
@@ -162,7 +164,7 @@ Fit a distance-penalized VDA model with penalty strength ρ.
     Convergence is determined based on the rule `gradsq < gtol`, where `gradsq` is squared Euclidean norm of the gradient and `gtol` is a tolerance parameter.
 
 !!! Tip
-    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, projection_type, problem, nothing)`.
+    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, (projection_type, rng), problem, nothing)`.
 
 # Keyword Arguments
 
@@ -179,9 +181,10 @@ function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, ep
     gtol::Real=1e-6,
     nesterov::Int=10,
     callback::F=DEFAULT_CALLBACK,
+    rng::AbstractRNG=Random.GLOBAL_RNG,
     ) where {T,F}
     # Check for missing data structures.
-    extras = __mm_init__(algorithm, projection_type, problem, _extras_)
+    extras = __mm_init__(algorithm, (projection_type, rng), problem, _extras_)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, coeff_proj = problem
@@ -240,9 +243,10 @@ function solve_constrained!(algorithm::PGD, problem::MVDAProblem, epsilon::Real,
     rho_init::Real=DEFAULT_RHO_INIT,
     nesterov::Int=10,
     callback::F=DEFAULT_CALLBACK,
+    rng::AbstractRNG=Random.GLOBAL_RNG,
     kwargs...) where{T,F}
     # Check for missing data structures.
-    extras = __mm_init__(algorithm, projection_type, problem, _extras_)
+    extras = __mm_init__(algorithm, (projection_type, rng), problem, _extras_)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, coeff_proj = problem

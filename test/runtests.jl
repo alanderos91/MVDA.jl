@@ -3,13 +3,14 @@ using LinearAlgebra, Random, StableRNGs, Parameters, Statistics
 using Test
 
 @testset "Projections" begin
+    rng = StableRNG(2000)
     @testset "L0Projection" begin
         # randomized
         for _ in 1:10
             number_components = 1000
             x = 10 * randn(number_components)
             k = 50
-            P = L0Projection(number_components)
+            P = L0Projection(rng, number_components)
             xproj = P(copy(x), k)
 
             nzidx = findall(xi -> xi != 0, xproj)
@@ -20,7 +21,7 @@ using Test
         # ties
         x = Float64[2, 1, 1, 1, 1, -0.6, 0.5, 0.5]
         shuffle!(StableRNG(1234), x)
-        P = L0Projection(length(x))
+        P = L0Projection(rng, length(x))
         x_sorted = sort(x, lt=isless, by=abs, rev=true, order=Base.Order.Forward)
         x_zero = P(copy(x), 0)
         @test x_zero == zeros(length(x))
@@ -37,7 +38,7 @@ using Test
         nfeatures = 100
         X = 10 * randn(nfeatures, ncategories)
         k = 10
-        P = HomogeneousL0Projection(nfeatures)
+        P = HomogeneousL0Projection(rng, nfeatures)
         Xproj = P(copy(X), k)
 
         norms = map(norm, eachrow(Xproj))
@@ -51,7 +52,7 @@ using Test
         nfeatures = 100
         X = 10 * randn(nfeatures, ncategories)
         k = 10
-        P = HeterogeneousL0Projection(ncategories, nfeatures)
+        P = HeterogeneousL0Projection(rng, ncategories, nfeatures)
         Xproj = P(copy(X), k)
 
         correct_length, correct_subsets = true, true
@@ -115,7 +116,7 @@ function test_on_dataset(prob, L, X, k)
         ρ = 4.7
     
         # Initialize other data structures.
-        extras = MVDA.__mm_init__(MMSVD(), prob, nothing)
+        extras = MVDA.__mm_init__(MMSVD(), (HomogeneousL0Projection, rng), prob, nothing)
         MVDA.__mm_update_rho__(MMSVD(), prob, extras, λ, ρ)
 
         # Set projection.
@@ -229,3 +230,12 @@ end
         test_on_dataset(prob, L, X, k)
     end
 end
+
+using Literate
+
+Literate.markdown(
+    joinpath(@__DIR__, "benchmarking.jl"),
+    joinpath(@__DIR__, "output");
+    execute=true,
+    flavor=Literate.CommonMarkFlavor()
+)

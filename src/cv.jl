@@ -105,6 +105,7 @@ function cv_path(
     progress_bar::Progress=Progress(nfolds * length(s_grid); desc="Running CV w/ $(algorithm)... ", enabled=show_progress),
     data_transform::Type{T}=ZScoreTransform,
     rho_init=DEFAULT_RHO_INIT,
+    rng::AbstractRNG=Random.GLOBAL_RNG,
     kwargs...,
     ) where {D,G,S,T}
     # Sanity checks.
@@ -136,7 +137,7 @@ function cv_path(
         
         # Create a problem object for the training set.
         train_problem = MVDAProblem(train_L, train_X, problem)
-        extras = __mm_init__(algorithm, projection_type, train_problem, nothing)
+        extras = __mm_init__(algorithm, (projection_type, rng), train_problem, nothing)
         param_sets = (train_problem.coeff, train_problem.coeff_prev, train_problem.coeff_proj)
         
         # Set initial model parameters.
@@ -261,7 +262,7 @@ function __cv_tune_loop__(::Kernel, fit_args::T1, grids::T2, data_subsets::T3, m
         # Create a problem object for the training set.
         new_kernel = ScaledKernel(problem.kernel, gamma)
         train_problem = MVDAProblem(train_L, train_X, problem, new_kernel)
-        extras = __mm_init__(algorithm, Nothing, train_problem, nothing)
+        extras = __mm_init__(algorithm, (Nothing, nothing), train_problem, nothing)
         param_sets = (train_problem.coeff, train_problem.coeff_prev, train_problem.coeff_proj)
 
         # Set initial model parameters.
@@ -297,7 +298,7 @@ function __cv_tune_loop__(::Nothing, fit_args::T1, grids::T2, data_subsets::T3, 
 
     # Create a problem object for the training set.
     train_problem = MVDAProblem(train_L, train_X, problem)
-    extras = __mm_init__(algorithm, Nothing, train_problem, nothing)
+    extras = __mm_init__(algorithm, (Nothing, nothing), train_problem, nothing)
     param_sets = (train_problem.coeff, train_problem.coeff_prev, train_problem.coeff_proj)
 
     gamma = 0.0
