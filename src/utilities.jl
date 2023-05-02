@@ -146,7 +146,8 @@ end
 Evaluate the penalized least squares criterion. Also updates the gradient.
 This assumes that projections have been handled externally.
 """
-function evaluate_objective!(problem::MVDAProblem, extras, epsilon, lambda, rho)
+function evaluate_objective!(problem::MVDAProblem, extras, hyperparams)
+    @unpack epsilon, lambda, rho = hyperparams
     @unpack coeff, res, grad = problem
     n, p, _ = probsizes(problem)
 
@@ -164,7 +165,11 @@ function evaluate_objective!(problem::MVDAProblem, extras, epsilon, lambda, rho)
     return __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
 end
 
-function evaluate_objective!(problem::MVDAProblem, extras, epsilon, lambda)
+"""
+Evaluate the objective in the regularized, unconstrained version of the problem.
+"""
+function evaluate_objective_reg!(problem::MVDAProblem, extras, hyperparams)
+    @unpack epsilon, lambda = hyperparams
     @unpack coeff, res, grad = problem
     n, p, _ = probsizes(problem)
 

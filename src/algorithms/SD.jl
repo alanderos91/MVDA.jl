@@ -68,7 +68,8 @@ function __steepest_descent__(problem::MVDAProblem, extras, alpha, beta)
 end
 
 # Apply one update in distance penalized problem.
-function __mm_iterate__(::SD, problem::MVDAProblem, extras, epsilon, lambda, rho, k)
+function __mm_iterate__(::SD, problem::MVDAProblem, extras, hyperparams)
+    @unpack epsilon, lambda, rho, k = hyperparams
     n, p, _ = probsizes(problem)
     T = floattype(problem)
     alpha, beta = T(1/n), T(lambda/p+rho/p)
@@ -81,7 +82,8 @@ function __mm_iterate__(::SD, problem::MVDAProblem, extras, epsilon, lambda, rho
 end
 
 # Apply one update in regularized problem.
-function __mm_iterate__(::SD, problem::MVDAProblem, extras, epsilon, lambda)
+function __mm_iterate_reg__(::SD, problem::MVDAProblem, extras, hyperparams)
+    @unpack epsilon, lambda = hyperparams
     n, p, _ = probsizes(problem)
     T = floattype(problem)
     alpha, beta = T(1/n), T(lambda/p)

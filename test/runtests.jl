@@ -114,7 +114,8 @@ function test_on_dataset(prob, L, X, k)
         ϵ = 0.5 * sqrt(2*c/(c-1))
         λ = 1.0
         ρ = 4.7
-    
+        hyperparams = (;epsilon=ϵ, lambda=λ, rho=ρ)
+
         # Initialize other data structures.
         extras = MVDA.__mm_init__(MMSVD(), (HomogeneousL0Projection, rng), prob, nothing)
         MVDA.__mm_update_rho__(MMSVD(), prob, extras, λ, ρ)
@@ -153,7 +154,7 @@ function test_on_dataset(prob, L, X, k)
         end
     
         @testset "Objective" begin
-            nt = MVDA.evaluate_objective!(prob, extras, ϵ, λ, ρ)
+            nt = MVDA.evaluate_objective!(prob, extras, hyperparams)
             @test nt.risk ≈ 1//n * dot(R1, R1)
             @test nt.loss ≈ 1//2 * (1//n * dot(R1, R1) + λ/p * dot(B, B))
             @test nt.objective ≈ 1//2 * (1//n * dot(R1, R1) + λ/p * dot(B, B) + ρ/p * dot(R2, R2))

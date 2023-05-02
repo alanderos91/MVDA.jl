@@ -23,7 +23,7 @@ function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda,
     __mm_update_lambda__(algorithm, problem, extras, lambda, zero(lambda))
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    state = evaluate_objective!(problem, extras, epsilon, lambda)
+    state = evaluate_objective_reg!(problem, extras, hyperparams)
     callback((0, state), problem, hyperparams)
     old = state.objective
 
@@ -39,10 +39,10 @@ function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda,
         iters += 1
 
         # Apply an algorithm map to update estimates.
-        __mm_iterate__(algorithm, problem, extras, epsilon, lambda)
+        __mm_iterate_reg__(algorithm, problem, extras, hyperparams)
 
         # Update loss, objective, and gradient.
-        state = evaluate_objective!(problem, extras, epsilon, lambda)
+        state = evaluate_objective_reg!(problem, extras, hyperparams)
         callback((iter, state), problem, hyperparams)
 
         # Assess convergence.
@@ -118,7 +118,7 @@ function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsi
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+    state = evaluate_objective!(problem, extras, hyperparams)
     callback((0, state), problem, hyperparams)
     old = state.distance
 
@@ -143,12 +143,15 @@ function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsi
         end
                 
         # Update according to annealing schedule.
-        rho = ifelse(iter < maxrhov, rhof(rho, iter, rho_max), rho)
+        if iter < maxrhov
+            rho = rhof(rho, iter, rho_max)
+            hyperparams = (; hyperparams..., rho=rho,)
+        end
     end
     
     # Project solution to the constraint set.
     apply_projection(projection, problem, k)
-    state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+    state = evaluate_objective!(problem, extras, hyperparams)
 
     return ((iters, state), rho)
 end
@@ -199,7 +202,7 @@ function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, ep
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+    state = evaluate_objective!(problem, extras, hyperparams)
     old = state.objective
 
     # Initialize iteration counts.
@@ -209,11 +212,11 @@ function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, ep
         iters += 1
 
         # Apply an algorithm map to update estimates.
-        __mm_iterate__(algorithm, problem, extras, epsilon, lambda, rho, k)
+        __mm_iterate__(algorithm, problem, extras, hyperparams)
 
         # Update loss, objective, distance, and gradient.
         apply_projection(projection, problem, k)
-        state = evaluate_objective!(problem, extras, epsilon, lambda, rho)
+        state = evaluate_objective!(problem, extras, hyperparams)
         callback((iter, state), problem, hyperparams)
 
         # Assess convergence.
@@ -263,7 +266,7 @@ function solve_constrained!(algorithm::PGD, problem::MVDAProblem, epsilon::Real,
     __mm_update_lambda__(algorithm, problem, extras, lambda, zero(rho))
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    state = evaluate_objective_pgd!(problem, extras, epsilon, lambda, 1.0)
+    state = evaluate_objective_pgd!(problem, extras, hyperparams, 1.0)
     callback((0, state), problem, hyperparams)
     old = state.objective
 
@@ -274,10 +277,10 @@ function solve_constrained!(algorithm::PGD, problem::MVDAProblem, epsilon::Real,
         iters += 1
 
         # Apply an algorithm map to update estimates.
-        t = __mm_iterate__(algorithm, problem, extras, epsilon, lambda, rho, k)
+        t = __mm_iterate__(algorithm, problem, extras, hyperparams)
 
         # Update loss, objective, distance, and gradient.
-        state = evaluate_objective_pgd!(problem, extras, epsilon, lambda, t)
+        state = evaluate_objective_pgd!(problem, extras, hyperparams, t)
         callback((iter, state), problem, hyperparams)
 
         # Assess convergence.

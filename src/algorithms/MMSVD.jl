@@ -121,7 +121,8 @@ function __linear_solve_SVD__(LHS_and_RHS::Function, problem::MVDAProblem, extra
 end
 
 # Apply one update.
-function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, epsilon, lambda, rho, k)
+function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, hyperparams)
+    @unpack epsilon, lambda, rho, k = hyperparams
     n, p, _ = probsizes(problem)
     T = floattype(problem)
     c1, c2, c3 = T(1/n), T(lambda/p), T(rho/p)
@@ -149,7 +150,8 @@ function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, epsilon, lambda, 
 end
 
 # Apply one update in regularized problem.
-function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, epsilon, lambda)
+function __mm_iterate_reg__(::MMSVD, problem::MVDAProblem, extras, hyperparams)
+    @unpack epsilon, lambda = hyperparams
     n, p, _ = probsizes(problem)
     T = floattype(problem)
     c1, c2 = T(1/n), T(lambda/p)

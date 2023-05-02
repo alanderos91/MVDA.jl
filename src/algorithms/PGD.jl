@@ -35,7 +35,8 @@ __mm_update_rho__(::PGD, problem::MVDAProblem, extras, lambda, rho) = nothing
 __mm_update_lambda__(::PGD, problem::MVDAProblem, extras, lambda, rho) = nothing
 
 # Apply one update in distance penalized problem.
-function __mm_iterate__(::PGD, problem::MVDAProblem, extras, epsilon, lambda, rho, k)
+function __mm_iterate__(::PGD, problem::MVDAProblem, extras, hyperparams)
+    @unpack epsilon, lambda, rho, k = hyperparams
     n, p, _ = probsizes(problem)
     T = floattype(problem)
     alpha, beta = T(1/n), T(lambda/p)
@@ -48,7 +49,8 @@ function __mm_iterate__(::PGD, problem::MVDAProblem, extras, epsilon, lambda, rh
 end
 
 # Apply one update in regularized problem; same as SGD since there are no constraints.
-function __mm_iterate__(::PGD, problem::MVDAProblem, extras, epsilon, lambda)
+function __mm_iterate_reg__(::PGD, problem::MVDAProblem, extras, hyperparams)
+    @unpack epsilon, lambda = hyperparams
     n, p, _ = probsizes(problem)
     T = floattype(problem)
     alpha, beta = T(1/n), T(lambda/p)
@@ -62,7 +64,8 @@ end
 """
 Evaluate loss + norm of gradient mapping in PGD.
 """
-function evaluate_objective_pgd!(problem::MVDAProblem, extras, epsilon, lambda, t)
+function evaluate_objective_pgd!(problem::MVDAProblem, extras, hyperparams, t)
+    @unpack epsilon, lambda = hyperparams
     @unpack coeff, coeff_prev, res, grad = problem
     n, p, _ = probsizes(problem)
 
