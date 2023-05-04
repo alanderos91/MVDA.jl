@@ -90,47 +90,6 @@ function evaluate_residuals!(problem::MVDAProblem, extras, epsilon, need_loss::B
     return nothing
 end
 
-# sparse model
-function evaluate_gradient!(problem::MVDAProblem, lambda, rho)
-    @unpack coeff, res, grad, intercept = problem
-    n, p, _ = probsizes(problem)
-    A = design_matrix(problem)
-    B = coeff.slope
-    T = floattype(problem)
-
-    alpha, beta, gamma = convert(T, 1/n), convert(T, lambda/p), convert(T, rho/p)
-
-    if intercept
-        mean!(grad.intercept, res.loss')
-        grad.intercept .*= -one(T)
-    end
-    copyto!(grad.slope, res.dist)
-    BLAS.gemm!('T', 'N', -alpha, A, res.loss, -gamma, grad.slope)
-    BLAS.axpy!(beta, B, grad.slope)
-
-    return nothing
-end
-
-# regularized model
-function evaluate_gradient!(problem::MVDAProblem, lambda)
-    @unpack coeff, res, grad, intercept = problem
-    n, p, _ = probsizes(problem)
-    A = design_matrix(problem)
-    B = coeff.slope
-    T = floattype(problem)
-
-    alpha, beta = convert(T, 1/n), convert(T, lambda/p)
-
-    if intercept
-        mean!(grad.intercept, res.loss')
-        grad.intercept .*= -one(T)
-    end
-    copyto!(grad.slope, B)
-    BLAS.gemm!('T', 'N', -alpha, A, res.loss, beta, grad.slope)
-
-    return nothing
-end
-
 function __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
     return (;
         risk=risk,
@@ -140,51 +99,6 @@ function __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
         distance=sqrt(distsq),
         gradient=sqrt(gradsq)
     )
-end
-
-"""
-Evaluate the penalized least squares criterion. Also updates the gradient.
-This assumes that projections have been handled externally.
-"""
-function evaluate_objective!(problem::MVDAProblem, extras, hyperparams)
-    @unpack epsilon, lambda, rho = hyperparams
-    @unpack coeff, res, grad = problem
-    n, p, _ = probsizes(problem)
-
-    evaluate_residuals!(problem, extras, epsilon, true, true)
-    evaluate_gradient!(problem, lambda, rho)
-
-    B, R, Q, G = coeff.slope, res.loss, res.dist, grad
-    risk = 1//n * dot(R, R)
-    penalty = dot(B, B)
-    loss = 1//2 * (risk + lambda/p*penalty)
-    distsq = dot(Q, Q)
-    obj = loss + 1//2*rho/p*distsq
-    gradsq = dot(G, G)
-
-    return __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
-end
-
-"""
-Evaluate the objective in the regularized, unconstrained version of the problem.
-"""
-function evaluate_objective_reg!(problem::MVDAProblem, extras, hyperparams)
-    @unpack epsilon, lambda = hyperparams
-    @unpack coeff, res, grad = problem
-    n, p, _ = probsizes(problem)
-
-    evaluate_residuals!(problem, extras, epsilon, true, false)
-    evaluate_gradient!(problem, lambda)
-
-    B, R, G = coeff.slope, res.loss, grad
-    risk = 1//n * dot(R, R)
-    penalty = dot(B, B)
-    loss = 1//2 * (risk + lambda/p*penalty)
-    distsq = zero(floattype(problem))
-    obj = loss
-    gradsq = dot(G, G)
-
-    return __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
 end
 
 """
@@ -219,17 +133,6 @@ Map a sparsity level `s` to an integer `k`, assuming `n` elements.
 sparsity_to_k(problem::MVDAProblem, s) = sparsity_to_k(problem.kernel, problem, s)
 sparsity_to_k(::Nothing, problem::MVDAProblem, s) = round(Int, (1-s) * problem.p)
 sparsity_to_k(::Kernel, problem::MVDAProblem, s) = round(Int, (1-s) * problem.n)
-
-"""
-Apply a projection to model coefficients.
-"""
-function apply_projection(projection, problem, k)
-    @unpack coeff, coeff_proj = problem
-    copyto!(coeff_proj.slope, coeff.slope)
-    copyto!(coeff_proj.intercept, coeff.intercept)
-    projection(coeff_proj.slope, k)
-    return coeff_proj
-end
 
 struct GeometricProression <: Function
     multiplier::Float64

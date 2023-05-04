@@ -13,7 +13,7 @@ function __mm_init__(::MMSVD, (projection_type, rng), problem::MVDAProblem, ::No
     nparams = ifelse(problem.kernel isa Nothing, p, n)
 
     # projection
-    projection = make_projection(projection_type, rng, nparams, c)
+    projection = make_projection(projection_type, rng, nparams, nd)
 
     # thin SVD of A
     F = svd(A, full=false)
@@ -37,17 +37,27 @@ end
 # Assume extras has the correct data structures.
 __mm_init__(::MMSVD, (projection_type, rng), problem::MVDAProblem, extras) = extras
 
-# Update data structures due to changing ρ.
-__mm_update_rho__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem, lambda, rho)
+function __mm_update_datastructures__(::MMSVD, f::PenalizedObjective{SqEpsilonLoss,RidgePenalty},
+    problem, extras, hparams)
+    #
+    n, _, _ = probsizes(problem)
+    T = floattype(problem)
+    scale_factor = get_scale_factor(f, problem, extras, hparams)
+    scaled_lambda = hparams.lambda*scale_factor
+    update_diagonal(extras, T(1/n), T(scaled_lambda))
+end
 
-# Update data structures due to changing λ. 
-__mm_update_lambda__(::MMSVD, problem::MVDAProblem, extras, lambda, rho) = update_diagonal(extras, problem, lambda, rho)
+function __mm_update_datastructures__(::MMSVD, f::PenalizedObjective{SqEpsilonLoss,SqDistPenalty},
+    problem, extras, hparams)
+    n, _, _ = probsizes(problem)
+    T = floattype(problem)
+    scale_factor = get_scale_factor(f, problem, extras, hparams)
+    scaled_rho = hparams.rho*scale_factor
+    update_diagonal(extras, T(1/n), T(scaled_rho))
+end
 
-function update_diagonal(extras, problem, lambda, rho)
+function update_diagonal(extras, alpha, beta)
     @unpack s, Psi = extras
-    n, p, _ = probsizes(problem)
-
-    alpha, beta = 1/n, lambda/p+rho/p
     for i in eachindex(Psi.diag)
         s2 = s[i]^2
         Psi.diag[i] = alpha*s2 / (alpha*s2 + beta)
@@ -121,42 +131,22 @@ function __linear_solve_SVD__(LHS_and_RHS::Function, problem::MVDAProblem, extra
 end
 
 # Apply one update.
-function __mm_iterate__(::MMSVD, problem::MVDAProblem, extras, hyperparams)
-    @unpack epsilon, lambda, rho, k = hyperparams
-    n, p, _ = probsizes(problem)
+function __mm_iterate__(::MMSVD, f::PenalizedObjective{SqEpsilonLoss,PENALTY},
+    problem::MVDAProblem, extras, hparams) where PENALTY <: Union{RidgePenalty,SqDistPenalty}
+    #
+    n, _, _ = probsizes(problem)
     T = floattype(problem)
-    c1, c2, c3 = T(1/n), T(lambda/p), T(rho/p)
-    
-    f = let c1=c1, c2=c2, c3=c3
-        function(problem, extras)
-            A = design_matrix(problem)
+    scale_factor = get_scale_factor(f, problem, extras, hparams)
 
-            # LHS: H = γ*A'A + β*I; pass as (β, V, Ψ) which computes H⁻¹ = β⁻¹[I - V Ψ Vᵀ]
-            H = (c2+c3, extras.V, extras.Psi)
-
-            # RHS: C = 1/n*AᵀZₘ + ρ*P(wₘ)
-            C = problem.coeff_proj.slope
-            BLAS.gemm!('T', 'N', c1, A, extras.Z, c3, C)
-
-            return H, C
-        end
+    if PENALTY <: RidgePenalty
+        scaled_lambda = hparams.lambda * scale_factor
+        c1, c2, c3 = T(1/n), T(scaled_lambda), zero(T)
+    else
+        scaled_rho = hparams.rho * scale_factor
+        c1, c2, c3 = T(1/n), T(scaled_rho), T(scaled_rho)
     end
 
-    apply_projection(extras.projection, problem, k)
-    evaluate_residuals!(problem, extras, epsilon, true, false)
-    __linear_solve_SVD__(f, problem, extras)
-
-    return nothing
-end
-
-# Apply one update in regularized problem.
-function __mm_iterate_reg__(::MMSVD, problem::MVDAProblem, extras, hyperparams)
-    @unpack epsilon, lambda = hyperparams
-    n, p, _ = probsizes(problem)
-    T = floattype(problem)
-    c1, c2 = T(1/n), T(lambda/p)
-    
-    f = let c1=c1, c2=c2
+    f = let c1=c1, c2=c2, c3=c3
         function(problem, extras)
             A = design_matrix(problem)
 
@@ -165,13 +155,42 @@ function __mm_iterate_reg__(::MMSVD, problem::MVDAProblem, extras, hyperparams)
 
             # RHS: C = 1/n*AᵀZₘ
             C = problem.coeff_proj.slope
-            BLAS.gemm!('T', 'N', c1, A, extras.Z, zero(T), C)
+            BLAS.gemm!('T', 'N', c1, A, extras.Z, c3, C)
             return H, C
         end
     end
 
-    evaluate_residuals!(problem, extras, epsilon, true, false)
+    apply_projection(problem, extras, hparams, false)
+    evaluate_residuals!(problem, extras, hparams.epsilon, true, false)
     __linear_solve_SVD__(f, problem, extras)
 
     return nothing
 end
+
+# # Apply one update in regularized problem.
+# function __mm_iterate_reg__(::MMSVD, f::PenalizedObjective{}, problem::MVDAProblem, extras, hyperparams)
+#     @unpack epsilon, lambda = hyperparams
+#     n, p, _ = probsizes(problem)
+#     T = floattype(problem)
+#     c1, c2 = T(1/n), T(lambda/p)
+    
+#     f = let c1=c1, c2=c2, c3=c3
+#         function(problem, extras)
+#             A = design_matrix(problem)
+
+#             # LHS: H = γ*A'A + β*I; pass as (β, V, Ψ) which computes H⁻¹ = β⁻¹[I - V Ψ Vᵀ]
+#             H = (c2+c3, extras.V, extras.Psi)
+
+#             # RHS: C = 1/n*AᵀZₘ + ρ*P(wₘ)
+#             C = problem.coeff_proj.slope
+#             BLAS.gemm!('T', 'N', c1, A, extras.Z, c3, C)
+
+#             return H, C
+#         end
+#     end
+
+#     evaluate_residuals!(problem, extras, epsilon, true, false)
+#     __linear_solve_SVD__(f, problem, extras)
+
+#     return nothing
+# end

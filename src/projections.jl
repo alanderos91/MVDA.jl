@@ -1,3 +1,7 @@
+#
+#   L0-type projections
+#
+
 """
 Project `x` onto sparsity set with `k` non-zero elements.
 Assumes `idx` enters as a vector of indices into `x`.
@@ -77,7 +81,6 @@ function __threshold__!(x, abs_pivot)
     end
     return nonzero_count
 end
-
 
 __iterateby__(::ObsDim.Constant{1}) = eachrow
 __iterateby__(::ObsDim.Constant{2}) = eachcol
@@ -168,6 +171,63 @@ end
 #   make_projection()
 #
 make_projection(::Type{Nothing}, rng, p, c) = nothing
-make_projection(::Type{L0Projection}, rng, p, c) = L0Projection(rng, p)
+make_projection(::Type{L0Projection}, rng, p, c) = L0Projection(rng, p*c)
 make_projection(::Type{HomogeneousL0Projection}, rng, p, c) = HomogeneousL0Projection(rng, p)
 make_projection(::Type{HeterogeneousL0Projection}, rng, p, c) = HeterogeneousL0Projection(rng, c, p)
+
+#
+#   apply_projection()
+#
+"""
+Apply a projection to model coefficients.
+"""
+function apply_projection(problem, extras, hparams, inplace)
+    @unpack coeff, coeff_proj = problem
+    if inplace
+        apply_projection(extras.projection, coeff.slope, hparams)
+    else
+        copyto!(coeff_proj.slope, coeff.slope)
+        copyto!(coeff_proj.intercept, coeff.intercept)
+        apply_projection(extras.projection, coeff_proj.slope, hparams)
+    end
+end
+
+apply_projection(::Nothing, x, hparams) = x
+
+function apply_projection(P::L0Projection, x, hparams)
+    @unpack k = hparams
+    P(x, k)
+end
+
+function apply_projection(P::HomogeneousL0Projection, x, hparams)
+    @unpack k = hparams
+    P(x, k)
+end
+
+function apply_projection(P::HeterogeneousL0Projection, x, hparams)
+    @unpack k = hparams
+    P(x, k)
+end
+
+#
+# get_scale_factor()
+#
+function get_scale_factor(::L0Projection, x, hparams)
+    @unpack k = hparams
+    scale_factor = 1 / max(1, (prod(size(x)) - k))
+    return scale_factor
+end
+
+function get_scale_factor(::HomogeneousL0Projection, x, hparams)
+    @unpack k = hparams
+    m, n = size(x)
+    scale_factor = 1 / max(1, n*(m-k))
+    return scale_factor
+end
+
+function get_scale_factor(::HeterogeneousL0Projection, x, hparams)
+    @unpack k = hparams
+    m, n = size(x)
+    scale_factor = 1 / max(1, n*(m-k))
+    return scale_factor
+end

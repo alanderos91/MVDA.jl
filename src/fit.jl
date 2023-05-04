@@ -1,9 +1,18 @@
+function solve!(f::AbstractVDAModel, args...; kwargs...)
+    solve_unconstrained!(f, args...; kwargs...)
+end
+
+function solve!(f::PenalizedObjective{LOSS,SqDistPenalty}, args...; kwargs...) where LOSS
+    solve_constrained!(f, args...; kwargs...)
+end
+
 """
-```solve!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
+```solve!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov=10], [verbose=false])```
 
 Fit an ℓ₂ regularized VDA model with hyperparameters (ϵ, λ).
 """
-function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda, _extras_::T=nothing;
+function solve_unconstrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, problem::MVDAProblem, hparams,
+    _extras_::T=nothing;
     maxiter::Int=DEFAULT_MAXITER,
     gtol::Real=DEFAULT_GTOL,
     nesterov::Int=DEFAULT_NESTEROV,
@@ -12,18 +21,19 @@ function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda,
     ) where {T,F}
     # Check for missing data structures.
     extras = __mm_init__(algorithm, (Nothing, nothing), problem, _extras_)
+    floatT = floattype(problem)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, coeff_proj = problem
 
     # Fix hyperparameters.
-    hyperparams = (;epsilon=epsilon, lambda=lambda, rho=zero(lambda), k=size(coeff.slope, 1))
+    hyperparams = (; hparams..., rho=zero(floatT))
 
     # Update data structures due to hyperparameters.
-    __mm_update_lambda__(algorithm, problem, extras, lambda, zero(lambda))
+    __mm_update_datastructures__(algorithm, f, problem, extras, hparams)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    state = evaluate_objective_reg!(problem, extras, hyperparams)
+    state = evaluate_model!(f, problem, extras, hyperparams)
     callback((0, state), problem, hyperparams)
     old = state.objective
 
@@ -32,17 +42,17 @@ function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda,
     nesterov_iter = 1
 
     if state.gradient < gtol
-        return ((iters, state), zero(lambda))
+        return ((iters, state), zero(floatT))
     end
 
     for iter in 1:maxiter
         iters += 1
 
         # Apply an algorithm map to update estimates.
-        __mm_iterate_reg__(algorithm, problem, extras, hyperparams)
+        __mm_iterate__(algorithm, f, problem, extras, hyperparams)
 
         # Update loss, objective, and gradient.
-        state = evaluate_objective_reg!(problem, extras, hyperparams)
+        state = evaluate_model!(f, problem, extras, hyperparams)
         callback((iter, state), problem, hyperparams)
 
         # Assess convergence.
@@ -58,7 +68,7 @@ function solve!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon, lambda,
     copyto!(coeff_proj.slope, coeff.slope)
     copyto!(coeff_proj.intercept, coeff.intercept)
 
-    return ((iters, state), zero(lambda))
+    return ((iters, state), zero(floatT))
 end
 
 """
@@ -87,7 +97,7 @@ Fit a sparse VDA model with hyperparameters (ϵ, λ, s) by solving a sequence of
 
 See also: [`MVDA.solve_unconstrained!`](@ref) for additional keyword arguments applied at the annealing step.
 """
-function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real,
+function solve_constrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, problem::MVDAProblem, hparams,
     _extras_::T=nothing;
     projection_type::Type=HomogeneousL0Projection,
     maxrhov::Int=DEFAULT_MAXRHOV,
@@ -108,26 +118,20 @@ function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsi
 
     # Initialize ρ and iteration count.
     rho, iters = rho_init, 0
-
-    # Fix hyperparameters.
-    k = sparsity_to_k(problem, s)
-    hyperparams = (;epsilon=epsilon, lambda=lambda, rho=rho, k=k)
+    hyperparams = (; hparams..., rho=rho)
     
     # Update data structures due to hyperparameters.
-    __mm_update_rho__(algorithm, problem, extras, lambda, rho)
+    __mm_update_datastructures__(algorithm, f, problem, extras, hyperparams)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    apply_projection(projection, problem, k)
-    state = evaluate_objective!(problem, extras, hyperparams)
+    state = evaluate_model!(f, problem, extras, hyperparams)
     callback((0, state), problem, hyperparams)
     old = state.distance
 
     for iter in 1:maxrhov
         # Solve minimization problem for fixed rho.
-        (inner_iters, state) = solve_unconstrained!(algorithm, problem, epsilon, lambda, s, rho, extras;
+        ((inner_iters, state), _) = solve_unconstrained!(f, algorithm, problem, hyperparams, extras;
             callback=callback,
-            projection_type=projection_type,
-            rng=rng,
             kwargs...,
         )
 
@@ -150,8 +154,7 @@ function solve_constrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsi
     end
     
     # Project solution to the constraint set.
-    apply_projection(projection, problem, k)
-    state = evaluate_objective!(problem, extras, hyperparams)
+    state = evaluate_model!(f, problem, extras, hyperparams)
 
     return ((iters, state), rho)
 end
@@ -177,7 +180,7 @@ Fit a distance-penalized VDA model with penalty strength ρ.
 - `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 """
-function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real, rho::Real,
+function solve_unconstrained!(f::PenalizedObjective{LOSS,SqDistPenalty}, algorithm::AbstractMMAlg, problem::MVDAProblem, hyperparams,
     _extras_::T=nothing;
     projection_type::Type=HomogeneousL0Projection,
     maxiter::Int=10^4,
@@ -185,7 +188,7 @@ function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, ep
     nesterov::Int=10,
     callback::F=DEFAULT_CALLBACK,
     rng::AbstractRNG=Random.GLOBAL_RNG,
-    ) where {T,F}
+    ) where {LOSS<:AbstractVDALoss,T,F}
     # Check for missing data structures.
     extras = __mm_init__(algorithm, (projection_type, rng), problem, _extras_)
 
@@ -193,16 +196,11 @@ function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, ep
     @unpack coeff, coeff_prev, coeff_proj = problem
     @unpack projection = extras
 
-    # Fix hyperparameters.
-    k = sparsity_to_k(problem, s)
-    hyperparams = (;epsilon=epsilon, lambda=lambda, rho=rho, k=k)
-
     # Update data structures due to hyperparameters.
-    __mm_update_rho__(algorithm, problem, extras, lambda, rho)
+    __mm_update_datastructures__(algorithm, f, problem, extras, hyperparams)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    apply_projection(projection, problem, k)
-    state = evaluate_objective!(problem, extras, hyperparams)
+    state = evaluate_model!(f, problem, extras, hyperparams)
     old = state.objective
 
     # Initialize iteration counts.
@@ -212,11 +210,10 @@ function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, ep
         iters += 1
 
         # Apply an algorithm map to update estimates.
-        __mm_iterate__(algorithm, problem, extras, hyperparams)
+        __mm_iterate__(algorithm, f, problem, extras, hyperparams)
 
         # Update loss, objective, distance, and gradient.
-        apply_projection(projection, problem, k)
-        state = evaluate_objective!(problem, extras, hyperparams)
+        state = evaluate_model!(f, problem, extras, hyperparams)
         callback((iter, state), problem, hyperparams)
 
         # Assess convergence.
@@ -233,75 +230,74 @@ function solve_unconstrained!(algorithm::AbstractMMAlg, problem::MVDAProblem, ep
     copyto!(coeff_prev.slope, coeff.slope)
     copyto!(coeff_prev.intercept, coeff.intercept)
 
-    return (iters, state)
+    return ((iters, state), hyperparams.rho)
 end
 
+# function solve_constrained!(algorithm::PGD, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real,
+#     _extras_::T=nothing;
+#     projection_type::Type=HomogeneousL0Projection,
+#     maxiter::Int=10^4,
+#     gtol::Real=DEFAULT_GTOL,
+#     rtol::Real=DEFAULT_RTOL,
+#     rho_init::Real=DEFAULT_RHO_INIT,
+#     nesterov::Int=10,
+#     callback::F=DEFAULT_CALLBACK,
+#     rng::AbstractRNG=Random.GLOBAL_RNG,
+#     kwargs...) where{T,F}
+#     # Check for missing data structures.
+#     extras = __mm_init__(algorithm, (projection_type, rng), problem, _extras_)
 
-function solve_constrained!(algorithm::PGD, problem::MVDAProblem, epsilon::Real, lambda::Real, s::Real,
-    _extras_::T=nothing;
-    projection_type::Type=HomogeneousL0Projection,
-    maxiter::Int=10^4,
-    gtol::Real=DEFAULT_GTOL,
-    rtol::Real=DEFAULT_RTOL,
-    rho_init::Real=DEFAULT_RHO_INIT,
-    nesterov::Int=10,
-    callback::F=DEFAULT_CALLBACK,
-    rng::AbstractRNG=Random.GLOBAL_RNG,
-    kwargs...) where{T,F}
-    # Check for missing data structures.
-    extras = __mm_init__(algorithm, (projection_type, rng), problem, _extras_)
+#     # Get problem info and extra data structures.
+#     @unpack coeff, coeff_prev, coeff_proj = problem
+#     @unpack projection = extras
 
-    # Get problem info and extra data structures.
-    @unpack coeff, coeff_prev, coeff_proj = problem
-    @unpack projection = extras
+#     # Initialize ρ and iteration count.
+#     rho, iters = rho_init, 0
 
-    # Initialize ρ and iteration count.
-    rho, iters = rho_init, 0
-
-    # Fix hyperparameters.
-    k = sparsity_to_k(problem, s)
-    hyperparams = (;epsilon=epsilon, lambda=lambda, rho=rho, k=k)
+#     # Fix hyperparameters.
+#     k = sparsity_to_k(problem, s)
+#     hyperparams = (;epsilon=epsilon, lambda=lambda, rho=rho, k=k)
     
-    # Update data structures due to hyperparameters.
-    __mm_update_lambda__(algorithm, problem, extras, lambda, zero(rho))
+#     # Update data structures due to hyperparameters.
+#     __mm_update_lambda__(algorithm, problem, extras, lambda, zero(rho))
 
-    # Check initial values for loss, objective, distance, and norm of gradient.
-    state = evaluate_objective_pgd!(problem, extras, hyperparams, 1.0)
-    callback((0, state), problem, hyperparams)
-    old = state.objective
+#     # Check initial values for loss, objective, distance, and norm of gradient.
+#     state = evaluate_objective_pgd!(problem, extras, hyperparams, 1.0)
+#     callback((0, state), problem, hyperparams)
+#     old = state.objective
 
-    # Initialize iteration counts.
-    iters = 0
-    nesterov_iter = 1
-    for iter in 1:maxiter
-        iters += 1
+#     # Initialize iteration counts.
+#     iters = 0
+#     nesterov_iter = 1
+#     for iter in 1:maxiter
+#         iters += 1
 
-        # Apply an algorithm map to update estimates.
-        t = __mm_iterate__(algorithm, problem, extras, hyperparams)
+#         # Apply an algorithm map to update estimates.
+#         t = __mm_iterate__(algorithm, problem, extras, hyperparams)
 
-        # Update loss, objective, distance, and gradient.
-        state = evaluate_objective_pgd!(problem, extras, hyperparams, t)
-        callback((iter, state), problem, hyperparams)
+#         # Update loss, objective, distance, and gradient.
+#         state = evaluate_objective_pgd!(problem, extras, hyperparams, t)
+#         callback((iter, state), problem, hyperparams)
 
-        # Assess convergence.
-        obj = state.objective
-        maxcoeff = norm(coeff_prev.slope, Inf)
-        if problem.intercept
-            maxcoeff = max(maxcoeff, norm(coeff_prev.slope, Inf))
-        end
-        if state.gradient < gtol || state.gradient < rtol*(1+maxcoeff)
-            break
-        elseif iter < maxiter
-            needs_reset = iter < nesterov || obj > old
-            nesterov_iter = nesterov_acceleration!(coeff, coeff_prev, nesterov_iter, needs_reset)
-            old = obj
-        end
-    end
-    # Save parameter estimates in case of warm start.
-    copyto!(coeff_proj.slope, coeff.slope)
-    copyto!(coeff_proj.intercept, coeff.intercept)
-    copyto!(coeff_prev.slope, coeff.slope)
-    copyto!(coeff_prev.intercept, coeff.intercept)
+#         # Assess convergence.
+#         obj = state.objective
+#         maxcoeff = norm(coeff_prev.slope, Inf)
+#         if problem.intercept
+#             maxcoeff = max(maxcoeff, norm(coeff_prev.slope, Inf))
+#         end
+#         if state.gradient < gtol || state.gradient < rtol*(1+maxcoeff)
+#             break
+#         elseif iter < maxiter
+#             needs_reset = iter < nesterov || obj > old
+#             nesterov_iter = nesterov_acceleration!(coeff, coeff_prev, nesterov_iter, needs_reset)
+#             old = obj
+#         end
+#     end
+#     # Save parameter estimates in case of warm start.
+#     copyto!(coeff_proj.slope, coeff.slope)
+#     copyto!(coeff_proj.intercept, coeff.intercept)
+#     copyto!(coeff_prev.slope, coeff.slope)
+#     copyto!(coeff_prev.intercept, coeff.intercept)
 
-    return ((iters, state), rho)
-end
+#     return ((iters, state), rho)
+# end

@@ -100,6 +100,7 @@ include("problem.jl")
 include("transform.jl")
 include("utilities.jl")
 include("projections.jl")
+include("models.jl")
 include("callbacks.jl")
 
 abstract type AbstractMMAlg end
@@ -129,5 +130,8 @@ export MVDAProblem, probdims, maximum_deadzone
 export MMSVD, SD, PGD
 export VerboseCallback
 export L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection
+export PenalizedObjective, RidgePenalty,
+    SquaredDistancePenalty, SqDistPenalty,
+    SquaredEpsilonInsensitiveLoss, SqEpsilonLoss
 
 end
