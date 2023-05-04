@@ -129,7 +129,9 @@ include("cv.jl")
 export MVDAProblem, probdims, maximum_deadzone
 export MMSVD, SD, PGD
 export VerboseCallback
-export L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection
+export L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection,
+    L1BallProjection, HomogeneousL1BallProjection, HeterogeneousL1BallProjection,
+    L2BallProjection, HomogeneousL2BallProjection, HeterogeneousL2BallProjection
 export PenalizedObjective, RidgePenalty,
     SquaredDistancePenalty, SqDistPenalty,
     SquaredEpsilonInsensitiveLoss, SqEpsilonLoss

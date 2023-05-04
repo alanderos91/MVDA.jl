@@ -3,6 +3,8 @@ using MVDA: LassoPenalty
 using LinearAlgebra, Random, StableRNGs, Parameters, Statistics
 using Test
 
+isless_or_approx_equal(x, y) = x < y || x ≈ y
+
 @testset "Projections" begin
     rng = StableRNG(2000)
     @testset "L0Projection" begin
@@ -64,6 +66,92 @@ using Test
         end
         @test correct_length
         @test correct_subsets
+    end
+
+    @testset "L1BallProjection" begin
+        number_categories = 3
+        number_components = 1000
+        lambda = 1.0
+
+        # vector
+        x = 10 * randn(number_components)
+        P = L1BallProjection(number_components)
+        xproj = P(copy(x), lambda)
+        @test isless_or_approx_equal(norm(xproj, 1), lambda)
+
+        # matrix, interpreted as vector
+        x = 10 * randn(number_components, number_categories)
+        lambda = 1.0
+        P = L1BallProjection(number_components * number_categories)
+        xproj = P(copy(x), lambda)
+        @test isless_or_approx_equal(norm(xproj, 1), lambda)
+    end
+
+    @testset "HomogeneousL1BallProjection" begin
+        number_categories = 3
+        number_components = 1000
+        lambda = 1.0
+
+        x = 10 * randn(number_components, number_categories)
+        P = HomogeneousL1BallProjection(number_categories)
+        xproj = P(copy(x), lambda)
+        norms = map(Base.Fix2(norm, 1), eachrow(xproj))
+        @test all(Base.Fix2(isless_or_approx_equal, lambda), norms)
+    end
+
+    @testset "HeterogeneousL1BallProjection" begin
+        number_categories = 3
+        number_components = 1000
+        lambda = 1.0
+
+        x = 10 * randn(number_components, number_categories)
+        P = HeterogeneousL1BallProjection(number_components)
+        xproj = P(copy(x), lambda)
+        norms = map(Base.Fix2(norm, 1), eachcol(xproj))
+        @test all(Base.Fix2(isless_or_approx_equal, lambda), norms)
+    end
+
+    @testset "L2BallProjection" begin
+        number_categories = 3
+        number_components = 1000
+        lambda = 1.0
+
+        # vector
+        x = 10 * randn(number_components)
+        P = L2BallProjection()
+        xproj = P(copy(x), lambda)
+        @test isless_or_approx_equal(norm(xproj, 2), lambda)
+
+        # matrix, interpreted as vector
+        x = 10 * randn(number_components, number_categories)
+        lambda = 1.0
+        P = L2BallProjection()
+        xproj = P(copy(x), lambda)
+        @test isless_or_approx_equal(norm(xproj, 2), lambda)
+    end
+
+    @testset "HomogeneousL2BallProjection" begin
+        number_categories = 3
+        number_components = 1000
+        lambda = 1.0
+
+        x = 10 * randn(number_components, number_categories)
+        P = HomogeneousL2BallProjection()
+        xproj = P(copy(x), lambda)
+        norms = map(Base.Fix2(norm, 2), eachrow(xproj))
+        @test all(Base.Fix2(isless_or_approx_equal, lambda), norms)
+    end
+
+    @testset "HeterogeneousL2BallProjection" begin
+        number_categories = 3
+        number_components = 1000
+        lambda = 1.0
+
+        x = 10 * randn(number_components, number_categories)
+        P = HeterogeneousL2BallProjection()
+        xproj = P(copy(x), lambda)
+        norms = map(Base.Fix2(norm, 2), eachcol(xproj))
+        @test all(Base.Fix2(isless_or_approx_equal, lambda), norms)
     end
 end
 
@@ -177,6 +265,120 @@ end
             end
             expected_slope = -scaled_rho * copy(R.dist)
             projection = MVDA.make_projection(HeterogeneousL0Projection, rng, n_features, n_dims)
+
+            scale_factor = MVDA.get_scale_factor(projection, B.slope, hparams)
+            penalty = MVDA.evaluate_model!(SquaredDistancePenalty(), (scale_factor, G, R), hparams)
+    
+            @test scale_factor ≈ correct_scale_factor
+            @test penalty ≈ dot(R.dist, R.dist) * correct_scale_factor
+            @test G.slope ≈ expected_slope
+            @test all(sign.(G.slope) .== sign.(expected_slope))
+            @test norm(G.intercept) ≈ 0.0
+        end
+
+        @testset "L1BallProjection" begin
+            foreach(x -> fill!(x, 0), G)
+            randn!(R.dist)
+
+            correct_scale_factor = 1 / (n_features * n_dims)
+            scaled_rho = hparams.rho * correct_scale_factor
+            expected_slope = -scaled_rho * copy(R.dist)
+            projection = MVDA.make_projection(L1BallProjection, rng, n_features, n_dims)
+
+            scale_factor = MVDA.get_scale_factor(projection, B.slope, hparams)
+            penalty = MVDA.evaluate_model!(SquaredDistancePenalty(), (scale_factor, G, R), hparams)
+    
+            @test scale_factor ≈ correct_scale_factor
+            @test penalty ≈ dot(R.dist, R.dist) * correct_scale_factor
+            @test G.slope ≈ expected_slope
+            @test all(sign.(G.slope) .== sign.(expected_slope))
+            @test norm(G.intercept) ≈ 0.0
+        end
+
+        @testset "HomogeneousL1BallProjection" begin
+            foreach(x -> fill!(x, 0), G)
+            randn!(R.dist)
+
+            correct_scale_factor = 1 / (n_features * n_dims)
+            scaled_rho = hparams.rho * correct_scale_factor
+            expected_slope = -scaled_rho * copy(R.dist)
+            projection = MVDA.make_projection(HomogeneousL1BallProjection, rng, n_features, n_dims)
+
+            scale_factor = MVDA.get_scale_factor(projection, B.slope, hparams)
+            penalty = MVDA.evaluate_model!(SquaredDistancePenalty(), (scale_factor, G, R), hparams)
+    
+            @test scale_factor ≈ correct_scale_factor
+            @test penalty ≈ dot(R.dist, R.dist) * correct_scale_factor
+            @test G.slope ≈ expected_slope
+            @test all(sign.(G.slope) .== sign.(expected_slope))
+            @test norm(G.intercept) ≈ 0.0
+        end
+
+        @testset "HeterogeneousL1BallProjection" begin
+            foreach(x -> fill!(x, 0), G)
+            randn!(R.dist)
+
+            correct_scale_factor = 1 / (n_features * n_dims)
+            scaled_rho = hparams.rho * correct_scale_factor
+            expected_slope = -scaled_rho * copy(R.dist)
+            projection = MVDA.make_projection(HeterogeneousL1BallProjection, rng, n_features, n_dims)
+
+            scale_factor = MVDA.get_scale_factor(projection, B.slope, hparams)
+            penalty = MVDA.evaluate_model!(SquaredDistancePenalty(), (scale_factor, G, R), hparams)
+    
+            @test scale_factor ≈ correct_scale_factor
+            @test penalty ≈ dot(R.dist, R.dist) * correct_scale_factor
+            @test G.slope ≈ expected_slope
+            @test all(sign.(G.slope) .== sign.(expected_slope))
+            @test norm(G.intercept) ≈ 0.0
+        end
+
+        @testset "L2BallProjection" begin
+            foreach(x -> fill!(x, 0), G)
+            randn!(R.dist)
+
+            correct_scale_factor = 1 / (n_features * n_dims)
+            scaled_rho = hparams.rho * correct_scale_factor
+            expected_slope = -scaled_rho * copy(R.dist)
+            projection = MVDA.make_projection(L2BallProjection, rng, n_features, n_dims)
+
+            scale_factor = MVDA.get_scale_factor(projection, B.slope, hparams)
+            penalty = MVDA.evaluate_model!(SquaredDistancePenalty(), (scale_factor, G, R), hparams)
+    
+            @test scale_factor ≈ correct_scale_factor
+            @test penalty ≈ dot(R.dist, R.dist) * correct_scale_factor
+            @test G.slope ≈ expected_slope
+            @test all(sign.(G.slope) .== sign.(expected_slope))
+            @test norm(G.intercept) ≈ 0.0
+        end
+
+        @testset "HomogeneousL2BallProjection" begin
+            foreach(x -> fill!(x, 0), G)
+            randn!(R.dist)
+
+            correct_scale_factor = 1 / (n_features * n_dims)
+            scaled_rho = hparams.rho * correct_scale_factor
+            expected_slope = -scaled_rho * copy(R.dist)
+            projection = MVDA.make_projection(HomogeneousL2BallProjection, rng, n_features, n_dims)
+
+            scale_factor = MVDA.get_scale_factor(projection, B.slope, hparams)
+            penalty = MVDA.evaluate_model!(SquaredDistancePenalty(), (scale_factor, G, R), hparams)
+    
+            @test scale_factor ≈ correct_scale_factor
+            @test penalty ≈ dot(R.dist, R.dist) * correct_scale_factor
+            @test G.slope ≈ expected_slope
+            @test all(sign.(G.slope) .== sign.(expected_slope))
+            @test norm(G.intercept) ≈ 0.0
+        end
+
+        @testset "HeterogeneousL2BallProjection" begin
+            foreach(x -> fill!(x, 0), G)
+            randn!(R.dist)
+
+            correct_scale_factor = 1 / (n_features * n_dims)
+            scaled_rho = hparams.rho * correct_scale_factor
+            expected_slope = -scaled_rho * copy(R.dist)
+            projection = MVDA.make_projection(HeterogeneousL2BallProjection, rng, n_features, n_dims)
 
             scale_factor = MVDA.get_scale_factor(projection, B.slope, hparams)
             penalty = MVDA.evaluate_model!(SquaredDistancePenalty(), (scale_factor, G, R), hparams)
@@ -303,16 +505,18 @@ function test_on_dataset(prob, L, X, k)
         end
 
         f = PenalizedObjective(SquaredEpsilonInsensitiveLoss(), SquaredDistancePenalty())
-        projections = (L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection)
+        projections = (
+            L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection,
+            L1BallProjection, HomogeneousL1BallProjection, HeterogeneousL1BallProjection,
+            L2BallProjection, HomogeneousL2BallProjection, HeterogeneousL2BallProjection,
+        )
         @testset "$(loss) + $(projection)" for loss in loss_models, projection in projections
             @testset "$(algorithm)" for algorithm in (MMSVD(), SD(),)
-                function test_descent_property(hparams, s, threshold)
+                function test_descent_property(hparams, threshold)
                     B = prob.coeff.slope
                     rng = StableRNG(1903)
                     randn!(rng, B)
                     copyto!(prob.coeff_prev.slope, B)
-                    k = MVDA.sparsity_to_k(prob, s)
-                    hparams = (; hparams..., k=k,)
 
                     (_, state0A), _ = MVDA.solve_unconstrained!(f, algorithm, prob, hparams, maxiter=0, gtol=1e-3, nesterov=threshold, projection_type=projection, rng=rng)
                     (_, state0B), _ = MVDA.solve_unconstrained!(f, algorithm, prob, hparams, maxiter=0, gtol=1e-3, nesterov=threshold, projection_type=projection, rng=rng)
@@ -330,13 +534,24 @@ function test_on_dataset(prob, L, X, k)
                     @test all(!isnan, B) # no instability
                 end
 
-                # check for different model sizes
-                for s in (0.0, 0.25, 0.5, 0.75)
+                if projection <: L0Projection || projection <: HomogeneousL0Projection || projection <: HeterogeneousL0Projection
+                    # check for different model sizes
+                    for s in (0.0, 0.25, 0.5, 0.75)
+                        k = MVDA.sparsity_to_k(prob, s)
+                        _hparams = (; hparams..., k=k,)
+
+                        # w/o Nesterov acceleration
+                        test_descent_property(_hparams, 100)
+
+                        # w/ Nesterov acceleration
+                        test_descent_property(_hparams, 10)
+                    end
+                else
                     # w/o Nesterov acceleration
-                    test_descent_property(hparams, s, 100)
+                    test_descent_property(hparams, 100)
 
                     # w/ Nesterov acceleration
-                    test_descent_property(hparams, s, 10)
+                    test_descent_property(hparams, 10)
                 end
             end
         end
