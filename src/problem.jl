@@ -147,7 +147,7 @@ samples/instances aligned along rows (e.g. `data[i,:]` is sample `i`).
 function MVDAProblem{T}(data_L, data_X;
     encoding::Symbol=:projected,
     intercept::Bool=true,
-    kernel::Union{Nothing,Kernel}=nothing) where {T,encT}
+    kernel::Union{Nothing,Kernel}=nothing) where {T}
     #
     labels = sort!(unique(data_L))
     K = length(labels)
