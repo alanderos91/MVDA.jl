@@ -1,3 +1,10 @@
+function __compute_svd__(A::AbstractMatrix{T}) where T <: Real
+    F = svd(A, full=false)
+    rtol = minimum(size(A)) * eps(T)
+    r = count(>(rtol*F.S[1]), F.S)
+    return SVD(F.U[:, 1:r], F.S[1:r], F.Vt[1:r, :])
+end
+
 # Y = B'x - b0
 function predicted_response!(Y, X, B, b0, intercept)
     T = eltype(Y)
