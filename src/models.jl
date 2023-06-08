@@ -140,6 +140,30 @@ const SqEpsilonLoss = SquaredEpsilonInsensitiveLoss
 
 abstract type AbstractVDAModel end
 
+struct UnpenalizedObjective{LOSS} <: AbstractVDAModel end
+
+function UnpenalizedObjective(::T) where {T<:AbstractVDALoss}
+    UnpenalizedObjective{T}()
+end
+
+function get_scale_factor(::UnpenalizedObjective{T}, problem::MVDAProblem, extras, hparams) where T
+    1.0
+end
+
+function evaluate_model!(::UnpenalizedObjective{LOSS}, problem::MVDAProblem, extras, hparams) where LOSS <: AbstractVDALoss
+    #
+    G = problem.grad
+
+    risk = evaluate_model!(LOSS(), problem, extras, hparams)
+    penalty = 0.0
+    loss = 1//2*risk
+    distsq = 0.0
+    obj = loss
+    gradsq = dot(G, G)
+
+    return __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
+end
+
 struct PenalizedObjective{LOSS,PENALTY} <: AbstractVDAModel end
 
 function PenalizedObjective(::T1, ::T2) where {T1<:AbstractVDALoss,T2<:AbstractVDAPenalty}

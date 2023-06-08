@@ -16,7 +16,7 @@ function __mm_init__(::MMSVD, (projection_type, rng), problem::MVDAProblem, ::No
     projection = make_projection(projection_type, rng, nparams, nd)
 
     # thin SVD of A
-    F = svd(A, full=false)
+    F = __compute_svd__(A)
     r = length(F.S)
 
     # constants
@@ -54,6 +54,11 @@ function __mm_update_datastructures__(::MMSVD, f::PenalizedObjective{SqEpsilonLo
     scale_factor = get_scale_factor(f, problem, extras, hparams)
     scaled_rho = hparams.rho*scale_factor
     update_diagonal(extras, T(1/n), T(scaled_rho))
+end
+
+function __mm_update_datastructures__(::MMSVD, f::UnpenalizedObjective{SqEpsilonLoss},
+    problem, extras, hparams)
+    return nothing
 end
 
 function update_diagonal(extras, alpha, beta)
@@ -167,30 +172,19 @@ function __mm_iterate__(::MMSVD, f::PenalizedObjective{SqEpsilonLoss,PENALTY},
     return nothing
 end
 
-# # Apply one update in regularized problem.
-# function __mm_iterate_reg__(::MMSVD, f::PenalizedObjective{}, problem::MVDAProblem, extras, hyperparams)
-#     @unpack epsilon, lambda = hyperparams
-#     n, p, _ = probsizes(problem)
-#     T = floattype(problem)
-#     c1, c2 = T(1/n), T(lambda/p)
-    
-#     f = let c1=c1, c2=c2, c3=c3
-#         function(problem, extras)
-#             A = design_matrix(problem)
+function __mm_iterate__(::MMSVD, f::UnpenalizedObjective{SqEpsilonLoss},
+    problem::MVDAProblem, extras, hparams)
+    #
+    @unpack coeff, intercept = problem
+    @unpack U, s, V, Z, buffer = extras
 
-#             # LHS: H = γ*A'A + β*I; pass as (β, V, Ψ) which computes H⁻¹ = β⁻¹[I - V Ψ Vᵀ]
-#             H = (c2+c3, extras.V, extras.Psi)
+    B = coeff.slope
+    # n, _, _ = probsizes(problem)
+    # T = floattype(problem)
+    evaluate_residuals!(problem, extras, hparams.epsilon, true, false)
+    mul!(buffer, transpose(U), Z)
+    ldiv!(Diagonal(s), buffer)
+    mul!(B, V, buffer)
 
-#             # RHS: C = 1/n*AᵀZₘ + ρ*P(wₘ)
-#             C = problem.coeff_proj.slope
-#             BLAS.gemm!('T', 'N', c1, A, extras.Z, c3, C)
-
-#             return H, C
-#         end
-#     end
-
-#     evaluate_residuals!(problem, extras, epsilon, true, false)
-#     __linear_solve_SVD__(f, problem, extras)
-
-#     return nothing
-# end
+    return nothing
+end

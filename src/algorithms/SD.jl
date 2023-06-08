@@ -85,6 +85,18 @@ function __mm_iterate__(::SD, f::PenalizedObjective{SqEpsilonLoss,PENALTY},
     return nothing
 end
 
+function __mm_iterate__(::SD, f::UnpenalizedObjective,
+    problem::MVDAProblem, extras, hparams)
+    #
+    n, _, _ = probsizes(problem)
+    T = floattype(problem)    
+
+    evaluate_model!(f, problem, extras, hparams)
+    __steepest_descent__(problem, extras, T(1/n), zero(T))
+
+    return nothing
+end
+
 # function __mm_iterate__(::SD, f::PenalizedObjective{SqEpsilonLoss,LassoPenalty},
 #     problem::MVDAProblem, extras, hparams)
 #     #
