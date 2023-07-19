@@ -98,7 +98,7 @@ function __apply_inverse__!(B, Hinv, C, buffer, alpha::Real=zero(eltype(B)))
 end
 
 function __apply_pseudoinverse__!(B, Hpinv, C, buffer, alpha::Real=zero(eltype(B)))
-    V, Psi = Hpinv
+    V, Psi, _ = Hpinv
 
     # Determine whether we are accumulating or storing result in B
     if iszero(alpha) # storing
@@ -128,7 +128,7 @@ function __inverse_quadratic_form__(Hinv, x, buffer)
 end
 
 function __pseudoinverse_quadratic_form__(Hpinv, x, buffer)
-    V, Psi = Hpinv
+    V, Psi, _ = Hpinv
     T = eltype(buffer)
     BLAS.gemv!('T', one(T), V, x, zero(T), buffer)
     for i in eachindex(buffer)
@@ -156,7 +156,9 @@ function __linear_solve_SVD__(LHS_and_RHS::Function, apply_inv!, eval_quadratic_
     if intercept
         # 2. Compute (generalized) Schur complement, s = 1 - x̄ᵀH⁻¹x̄
         s = 1 - eval_quadratic_form(Hinv, Abar, view(buffer, :, 1))
-
+        if s == 0 error("Case not implemented") end
+        s = ifelse(iszero(s), one(s), s)
+        
         # 3. Compute new intercept, b₀ = s⁻¹[z̄ - Bᵀx̄]
         mean!(b0, Z')
         BLAS.gemv!('T', -T(1/s), B, Abar, T(1/s), b0)
@@ -220,7 +222,7 @@ function __mm_iterate__(::MMSVD, f::UnpenalizedObjective{SqEpsilonLoss},
             A = design_matrix(problem)
 
             # LHS: H = A'A; pass as (V, Ψ) to represent H⁻¹ = V Ψ Vᵀ
-            H = (extras.V, extras.Psi)
+            H = (extras.V, extras.Psi, extras.U)
 
             # RHS: C = 1/n*AᵀZₘ
             C = problem.coeff_proj.slope
