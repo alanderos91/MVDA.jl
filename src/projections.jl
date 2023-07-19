@@ -176,7 +176,10 @@ function project_l1_ball!(x, r, xtmp, find_split::F=condat_algorithm1!) where F
     #   project x to the non-negative orthant
     #
     @. xtmp = abs(x)
-
+    if sum(xtmp) <= r
+        return x
+    end
+ 
     #
     #   compute the splitting element τ needed in KKT conditions
     #
@@ -330,6 +333,59 @@ struct HomogeneousL2BallProjection end
 struct HeterogeneousL2BallProjection end
 
 (P::HeterogeneousL2BallProjection)(X::AbstractMatrix, r) = project_l2_ball!(X, r; obsdim=ObsDim.Constant{2}())
+
+# #
+# #   Elastic Net projections
+# #
+
+# function project_elastic_net!(x::AbstractVector, r)
+#     v = norm(x)
+#     if v > r
+#         @. x = x / v * r
+#     end
+#     return x
+# end
+
+# function project_elastic_net!(X::AbstractMatrix, args...;
+#     obsdim::T=ObsDim.Constant{1}()) where T
+#     #
+#     iterateby = __iterateby__(convert(ObsDimension, obsdim))
+#     project_elastic_net!(iterateby, X, args...)
+# end
+
+# function project_elastic_net!(itr::F, X::AbstractMatrix, r) where F
+#     for x in itr(X)
+#         project_elastic_net!(x, r)
+#     end
+#     return X
+# end
+
+# #
+# #   ElasticNetProjection
+# #
+# struct ElasticNetProjection end
+
+# (P::ElasticNetProjection)(x::AbstractVector, r) = project_elastic_net!(x, r)
+# (P::ElasticNetProjection)(x::AbstractMatrix, r) = project_elastic_net!(vec(x), r)
+
+# #
+# #   HomogeneousElasticNetProjection
+# #
+# #   Shrunken features are homogeneous in the sense that their coordinates have norm <= r (rows).
+# #
+# struct HomogeneousElasticNetProjection end
+
+# (P::HomogeneousL2BallProjection)(X::AbstractMatrix, r) = project_elastic_net!(X, r; obsdim=ObsDim.Constant{1}())
+
+# #
+# #   HeterogeneousElasticNetProjection
+# #
+# #   Shrunken features are hetergeneous in the sense that their coordinates may have different norms.
+# #   Instead, we shrink all features along a given axis in the encoding space to have norm <= r (columns).
+# #
+# struct HeterogeneousElasticNetProjection end
+
+# (P::HeterogeneousElasticNetProjection)(X::AbstractMatrix, r) = project_elastic_net!(X, r; obsdim=ObsDim.Constant{2}())
 
 #
 #   make_projection()
