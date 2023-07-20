@@ -108,6 +108,18 @@ function __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
     )
 end
 
+function evaluate_gradient_mapping!(problem::MVDAProblem, t)
+    #
+    @unpack coeff, coeff_prev, grad = problem
+    grad.slope .= coeff_prev.slope - coeff.slope
+    v = norm(grad.slope, Inf)
+    if problem.intercept
+        grad.intercept .= coeff_prev.intercept - coeff.intercept
+        v = max(v, norm(grad.intercept, Inf))
+    end
+    return 1/t * v
+end
+
 """
 Apply acceleration to the current iterate `x` based on the previous iterate `y`
 according to Nesterov's method with parameter `r=3` (default).
