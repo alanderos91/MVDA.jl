@@ -91,6 +91,11 @@ get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{L2
 get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{HomogeneousL2BallProjection}) where L = :lambda
 get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{HeterogeneousL2BallProjection}) where L = :lambda
 
+# dispatch for penalty-free methods like PGD
+function get_penalty_hyperparameter_name(::UnpenalizedObjective{L}, ::Type{P}) where {L,P}
+    get_penalty_hyperparameter_name(PenalizedObjective{L,SqDistPenalty}(), P)
+end
+
 """
     cv_path(algorithm, problem, grids; [at], [kwargs...])
 
@@ -125,7 +130,7 @@ function cv_path(
     kwargs...,
     ) where {D,G,S,T}
     # Check model; this is ugly
-    if !(f isa PenalizedObjective{SqEpsilonLoss,SqDistPenalty})
+    if f isa UnpenalizedObjective && !(algorithm isa PGD)
         projection_type = Nothing
     end
 
@@ -386,7 +391,12 @@ function fit_tuned_model(f, algorithm, settings, hparams, (train_set, test_set);
     )
 end
 
-function cv(f::PenalizedObjective{LOSS,PEN}, algorithm::AbstractMMAlg, input_problem::MVDAProblem, grids::G;
+function cv(
+    f::Union{UnpenalizedObjective{LOSS},PenalizedObjective{LOSS,PEN}},
+    algorithm::AbstractMMAlg,
+    input_problem::MVDAProblem,
+    grids::G;
+    # keyword argument
     data::D=split_dataset(input_problem, 0.8),
     nfolds::Int=5,
     scoref::S=DEFAULT_SCORE_FUNCTION,
@@ -396,6 +406,10 @@ function cv(f::PenalizedObjective{LOSS,PEN}, algorithm::AbstractMMAlg, input_pro
     projection_type::Type=HomogeneousL0Projection,
     kwargs...
 ) where {LOSS,PEN,D,G,S}
+    if f isa UnpenalizedObjective && !(algorithm isa PGD)
+        projection_type = Nothing
+    end
+
     # Split data into train/test.
     train_data, test_data = data
     train_L, train_X = getobs(train_data, obsdim=1)
@@ -485,7 +499,7 @@ function cv(f::PenalizedObjective{LOSS,PEN}, algorithm::AbstractMMAlg, input_pro
 
     return (;
         model=f,
-        projection=PEN <: SqDistPenalty ? projection_type : Nothing,
+        projection=projection_type,
         kernel=settings.kernel,
         tune=(; score=tune_score, result=tune_result,),
         path=(; score=path_score, result=path_result,),
