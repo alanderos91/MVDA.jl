@@ -185,7 +185,11 @@ function solve_constrained!(f::AbstractVDAModel, algorithm::PGD, problem::MVDAPr
     __mm_update_datastructures__(algorithm, f, problem, extras, hyperparams)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
+    rand!(rng, coeff_prev.slope)
+    rand!(rng, coeff_prev.intercept)
     state = evaluate_model!(f, problem, extras, hyperparams)
+    gradient_mapping = evaluate_gradient_mapping!(problem, 1.0)
+    state = (; state..., gradient=gradient_mapping,) # gradient is not informative here
     callback((0, state), problem, hyperparams)
     old = state.objective
 
