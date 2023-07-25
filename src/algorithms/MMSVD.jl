@@ -156,7 +156,7 @@ function __linear_solve_SVD__(LHS_and_RHS::Function, apply_inv!, eval_quadratic_
     if intercept
         # 2. Compute (generalized) Schur complement, s = 1 - x̄ᵀH⁻¹x̄
         s = 1 - eval_quadratic_form(Hinv, Abar, view(buffer, :, 1))
-        if s == 0 error("Case not implemented") end
+        # if s == 0 error("Case not implemented") end
         s = ifelse(iszero(s), one(s), s)
         
         # 3. Compute new intercept, b₀ = s⁻¹[z̄ - Bᵀx̄]
