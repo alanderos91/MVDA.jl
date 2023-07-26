@@ -12,7 +12,7 @@ function read_last(file)
 end
 
 get_dataset(problem::MVDAProblem) = (original_labels(problem), problem.X)
-split_dataset(problem::MVDAProblem, at) = splitobs(get_dataset(problem), at=at, obsdim=1)
+split_dataset(problem::MVDAProblem, at) = splitobs(get_dataset(problem), at=at, obsdim=ObsDim.First())
 
 number_of_param_vals(grid::AbstractVector) = length(grid) 
 number_of_param_vals(grid::NTuple{N,<:Real}) where N = length(grid)
