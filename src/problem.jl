@@ -111,6 +111,10 @@ struct MVDAProblem{T<:AbstractFloat,encT,kernT,labelT,matT,vecT}
         res = allocate_res(T, kernel, n, p, nd)
         grad = allocate_coeff(T, kernel, n, p, nd)
 
+        coeff.slope .= 1
+        coeff_prev.slope .= 1
+        coeff_proj.slope .= 1
+
         # Extract the missing type information.
         matT, vecT = typeof(coeff.slope), typeof(coeff.intercept)
 
