@@ -174,9 +174,6 @@ function cv_path(
         for coeff_nt in param_sets
             foreach(Base.Fix2(fill!, 0), coeff_nt)
         end
-        # MVDA.solve!(
-        #     UnpenalizedObjective(SqEpsilonLoss()), SD(), train_problem, hparams; kwargs...
-        # )
 
         # Set initial value for rho.
         rho = rho_init
@@ -366,6 +363,11 @@ function fit_tuned_model(f, algorithm, settings, hparams, (train_set, test_set);
     callback = HistoryCallback()
     add_field!(callback, :iters, :risk, :loss, :objective, :distance, :penalty, :gradient, :rho)
     problem = MVDAProblem(train_set[1], train_set[2], settings)
+
+    param_sets = (problem.coeff, problem.coeff_prev, problem.coeff_proj)
+    for coeff_nt in param_sets
+        foreach(Base.Fix2(fill!, 0), coeff_nt)
+    end
 
     timed_result = @timed MVDA.solve!(f, algorithm, problem, hparams;
         callback=callback,

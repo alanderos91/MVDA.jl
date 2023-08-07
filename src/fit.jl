@@ -109,7 +109,7 @@ function solve_constrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, probl
 
         # Check for convergence to constrained solution.
         dist = state.distance
-        if dist < dtol || abs(dist - old) < rtol * (1 + old)
+        if rho >= 1e2 && (dist < dtol || abs(dist - old) < rtol * (1 + old))
             break
         else
           old = dist
