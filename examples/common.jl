@@ -42,7 +42,7 @@ function get_data_transform(kwargs)
     return data_transform
 end
 
-function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
+function run(dir, example, input_data, (ne, ng, nl, ns), projection_type, preshuffle::Bool=false;
     at::Real=0.8,
     nfolds::Int=5,
     nreplicates::Int=50,
@@ -59,14 +59,14 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
     end
 
     # Create MVDAProblem instance w/o kernel and construct grids.
-    problem = MVDAProblem(data[1], data[2], intercept=intercept, kernel=kernel)
+    problem = MVDAProblem(data[1], data[2], intercept=intercept, kernel=kernel, encoding=:standard)
     n, p, c = MVDA.probdims(problem)
     n_train = round(Int, n * at * (nfolds-1)/nfolds)
     n_validate = round(Int, n * at * 1/nfolds)
     n_test = round(Int, n * (1-at))
     nvars = ifelse(problem.kernel isa Nothing, p, n_train)
 
-    @info "Created MVDAProblem for $(example)" samples=n features=p classes=c
+    @info "Created MVDAProblem for $(example)" samples=n features=p classes=c projection=projection_type
 
     # Epsilon / Deadzone grid.
     e_grid = if ne > 1
@@ -85,26 +85,32 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
 
     # Lambda grid.
     l_grid = if nl > 1
-        make_log10_grid(-6, 6, nl)
+        sort!(make_log10_grid(-6, 6, nl), rev=true) # large values (less shrinkage) to small values (more shrinkage)
     else
         [1.0]
     end
 
     # Gamma / Scale grid.
     g_grid = if ng > 1
-        make_log10_grid(-3, 1, ng)
+        make_log10_grid(-1, 1, ng)
     else
         [0.0]
     end
     
     # Sparsity grid.
-    s_grid = make_sparsity_grid(nvars, ns)
+    k_grid = round.(Int, nvars .* (1 .- make_sparsity_grid(nvars, ns)))
     
-    grids = (e_grid, l_grid, g_grid, s_grid)
+    grids = (
+        epsilon=e_grid,
+        lambda=l_grid,
+        gamma=g_grid, 
+        k=k_grid,
+    )
 
     # other settings
     scoref = MVDA.accuracy
-    example_dir = joinpath(dir, example)
+    proj = string(projection_type)
+    example_dir = joinpath(dir, example, proj)
     if !ispath(example_dir)
         mkpath(example_dir)
         @info "Created directory for example $(example)" output_dir=example_dir
@@ -113,7 +119,8 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
     # Collect data for cross-validation replicates.
     @info "CV split: $(n_train) Train / $(n_validate) Validate / $(n_test) Test"
     
-    MVDA.repeated_cv(MMSVD(), problem, grids;
+    model = PenalizedObjective(SqEpsilonLoss(), SqDistPenalty())
+    MVDA.repeated_cv(model, MMSVD(), problem, grids;
         dir=example_dir,        # directory to store all results
         title=example,
         overwrite=true,
@@ -122,6 +129,8 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
         nreplicates=nreplicates,# number of CV replicates
         nfolds=nfolds,          # propagate number of folds
         rng=rng,                # random number generator for reproducibility
+        
+        projection_type=projection_type,
 
         scoref=scoref,          # scoring function; use prediction accuracy
         by=:validation,         # use accuracy on validation set to select hyperparameters
