@@ -66,12 +66,29 @@ get_index_set(::Kernel, (idx_sample, idx_feature)) = idx_sample
 function add_structural_zeros!(sparse, reduced, idxs)
     idx = get_index_set(sparse.kernel, idxs)
 
+    fill!(sparse.coeff.slope, 0)
     sparse.coeff.slope[idx, :] .= reduced.coeff.slope
     sparse.coeff.intercept .= reduced.coeff.intercept
 
+    fill!(sparse.coeff_proj.slope, 0)
     sparse.coeff_proj.slope[idx, :] .= reduced.coeff.slope
     sparse.coeff_proj.intercept .= reduced.coeff.intercept
 
+    return nothing
+end
+
+rescale_coefficients!(::NoTransformation, ::Any) = nothing
+
+function rescale_coefficients!(F::ZScoreTransform, prob)
+    if prob.kernel isa Nothing
+        prob.coeff.slope ./= F.scale
+        prob.coeff_proj.slope ./= F.scale
+
+        if prob.intercept
+            prob.coeff.intercept .-= prob.coeff.slope' * F.mean
+            prob.coeff_proj.intercept .-= prob.coeff.slope' * F.mean
+        end
+    end
     return nothing
 end
 
@@ -499,6 +516,10 @@ function cv(
     add_structural_zeros!(reduced_problem, tmp.problem, (idx_sample, idx_feature))
     reduced_result = (; tmp..., problem=reduced_problem,)
 
+    # Rescale the coefficients
+    rescale_coefficients!(F, fit_result.problem)
+    rescale_coefficients!(F, reduced_result.problem)
+
     return (;
         model=f,
         projection=projection_type,
@@ -541,14 +562,14 @@ function repeated_cv(f::AbstractVDAModel, algorithm::AbstractMMAlg, problem::MVD
     nvals = nreplicates * nvals_per_rep
     progress_bar = Progress(nvals; desc="Repeated CV", enabled=show_progress)
 
-    # Split data into randomized cross-validation and test sets.
-    unshuffled_cv_set, test_set = split_dataset(problem, at)
+    unshuffled_set = get_dataset(problem)
 
     # Replicate CV procedure several times.
     for i in 1:nreplicates
         progress_bar.desc = "Repeated CV | Replicate $(i) / $(nreplicates)"
-        # Shuffle cross validation set to permute the train/validation sets.
-        cv_set = shuffleobs(unshuffled_cv_set, obsdim=1, rng=rng)
+        # Split data into random training and test sets.
+        data = shuffleobs(unshuffled_set, obsdim=1, rng=rng)
+        cv_set, test_set = splitobs(data, at=at, obsdim=ObsDim.First())
 
         # Run cross validation pipeline.
         result = cv(f, algorithm, problem, grids;
