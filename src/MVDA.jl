@@ -10,9 +10,6 @@ using MLDataUtils: ObsDimension
 using Parameters
 using KernelFunctions, LinearAlgebra, Random, StableRNGs, Statistics, StatsBase
 
-# Multithreading
-using Polyester
-
 # Imports
 import Base: show, iterate
 import MLDataUtils: classify, predict, ind2label, label2ind, isposlabel, isneglabel, islabelenc

@@ -24,24 +24,9 @@ end
 # R enters as Yhat
 #
 function shifted_response!(Z, Y, R, epsilon)
-    num_julia_threads = Threads.nthreads()
-
-    if num_julia_threads == 1
-        for i in axes(Y, 1)
-            z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
-            shifted_response!(z, y, r, epsilon)
-        end
-    else
-        num_BLAS_threads = BLAS.get_num_threads()
-        try
-            BLAS.set_num_threads(1)
-            @batch per=core for i in axes(Y, 1)
-                z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
-                shifted_response!(z, y, r, epsilon)
-            end
-        finally
-            BLAS.set_num_threads(num_BLAS_threads)
-        end
+    for i in axes(Y, 1)
+        z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
+        shifted_response!(z, y, r, epsilon)
     end
 
     return nothing
@@ -186,9 +171,8 @@ function make_sparsity_grid(n, len)
         end
     end
     ys = unique!(round.(Int, (1 .- xs) .* n))
-    filter!(<=(n), ys)
-    xs = sort!(1 .- ys ./ n)
-    return xs
+    filter!(x -> 0 < x <= n, ys)
+    return sort!(ys, rev=true)
 end
 
 function make_regular_log10_grid(a, b, m)
