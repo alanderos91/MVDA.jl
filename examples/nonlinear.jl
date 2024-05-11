@@ -27,7 +27,7 @@ function waveform()
     DataFrame([L X], :auto)
 end
 
-function run_all_examples(dir, examples, projections)
+function run_all_examples(dir, seed, examples, projections)
     for (example, prob_settings, cv_settings, nhyper, data_transform, preshuffle) in examples
         df = if example == "clouds"
             clouds()
@@ -46,6 +46,7 @@ function run_all_examples(dir, examples, projections)
             run(dir, example, data, nhyper, projection_type, preshuffle;
                 at=split,           # CV set / Test set split
                 nfolds=nfolds,      # number of folds
+                seed=seed,
                 data_transform=data_transform,
                 nreplicates=nreplicates,
                 kernel=kernel,
@@ -59,18 +60,19 @@ end
 # Begin script
 #
 
-dir = ARGS[1]
-@info "Output directory: $(dir)"
+dir = ARGS[1]               # output directory
+seed = parse(Int, ARGS[2])  # seed for StableRNG
+@info "Running nonlinear benchmarks" dir=dir seed=seed
 
 examples = (
     # format:
     #
-    #   1. example name
-    #   2. number of folds
-    #   3. number of replicates
-    #   4. proportion for cross validation set
-    #   5. tuple: number epsilon values, number gamma values, number lambda values, number sparsity values
-    #   6. data transformation for normalization/standardization
+    #   1. string: example name
+    #   2. tuple: kernel choice (nothing => linear) and intercept indicator
+    #   3. tuple: (number of folds, number of replicates, proportion in CV set)
+    #   4. tuple: number of (epsilon, gamma, lambda, sparsity) values
+    #   5. type: data transformation for normalization/standardization
+    #   6. preshuffle indicator
     #
     ("clouds", (RBFKernel(), true,), (5, 50, 250/1250,), (1, 11, 97, 200), ZScoreTransform, true),
     ("circles", (RBFKernel(), true,), (5, 50, 250/1250,), (1, 5, 97, 200), ZScoreTransform, true),
@@ -84,12 +86,14 @@ examples = (
 )
 
 projections = (
-    HomogeneousL0Projection, HeterogeneousL0Projection,
-    HomogeneousL1BallProjection, HeterogeneousL1BallProjection
+    HomogeneousL0Projection,
+    HeterogeneousL0Projection,
+    # HomogeneousL1BallProjection,
+    HeterogeneousL1BallProjection
 )
 
 #
 #   MM
 #
 
-run_all_examples(dir, examples, projections)
+run_all_examples(dir, seed, examples, projections)

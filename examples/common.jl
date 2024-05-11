@@ -16,6 +16,8 @@ using MVDA: ZScoreTransform,
     NoTransformation,
     HistoryCallback
 
+BLAS.set_num_threads(Threads.nthreads())
+
 println(
     """
     --- BLAS Configuration ---
@@ -48,10 +50,11 @@ function run(dir, example, input_data, (ne, ng, nl, ns), projection_type, preshu
     nreplicates::Int=50,
     intercept::Bool=true,
     kernel::Union{Nothing,Kernel}=nothing,
+    seed::Int=1903,
     kwargs...
     )
     # Shuffle data before splitting.
-    rng = StableRNG(1903)
+    rng = StableRNG(seed)
     if preshuffle
         data = getobs(shuffleobs(input_data, ObsDim.First(), rng), ObsDim.First())
     else
@@ -98,7 +101,7 @@ function run(dir, example, input_data, (ne, ng, nl, ns), projection_type, preshu
     end
     
     # Sparsity grid.
-    k_grid = round.(Int, nvars .* (1 .- MVDA.make_sparsity_grid(nvars, ns)))
+    k_grid = MVDA.make_sparsity_grid(nvars, ns)
     
     grids = (
         epsilon=e_grid,
@@ -137,7 +140,7 @@ function run(dir, example, input_data, (ne, ng, nl, ns), projection_type, preshu
         minimize=false,         # maximize prediction accuracy
 
         maxrhov=10^2,           # outer iterations
-        maxiter=10^5,           # inner iterations
+        maxiter=10^4,           # inner iterations
         gtol=1e-3,              # tolerance on gradient for convergence of inner problem
         dtol=1e-3,              # tolerance on distance for convergence of outer problem
         rtol=0.0,               # use strict distance criteria
