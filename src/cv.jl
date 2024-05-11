@@ -143,7 +143,7 @@ function cv_path(
     progress_bar::Progress=Progress(nfolds; desc="Running CV w/ $(algorithm)... ", enabled=show_progress),
     data_transform::Type{T}=ZScoreTransform,
     rho_init=DEFAULT_RHO_INIT,
-    rng::AbstractRNG=Random.GLOBAL_RNG,
+    rng::AbstractRNG=Random.default_rng(),
     kwargs...,
     ) where {D,G,S,T}
     # Check model; this is ugly
@@ -204,6 +204,7 @@ function cv_path(
             _hparams = NamedTuple{hparam_keys}(hparam_vals)
             timed_result = @timed MVDA.solve!(
                 f, algorithm, train_problem, _hparams, extras;
+                rng=rng,
                 projection_type=projection_type,
                 rho_init=rho, 
                 kwargs...
@@ -537,7 +538,7 @@ function repeated_cv(f::AbstractVDAModel, algorithm::AbstractMMAlg, problem::MVD
     nfolds::Int=5,
     nreplicates::Int=10,
     show_progress::Bool=true,
-    rng::RNG=StableRNG(1903),
+    rng::RNG=Random.default_rng(),
     projection_type::Type=HomogeneousL0Projection,
     dir::String=mktempdir(pwd()),
     title::String="Example",

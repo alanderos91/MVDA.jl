@@ -7,7 +7,7 @@ Project `x` onto sparsity set with `k` non-zero elements.
 Assumes `idx` enters as a vector of indices into `x`.
 """
 function project_l0_ball!(x::AbstractVector, k::Integer,
-    rng::AbstractRNG=Random.GLOBAL_RNG,
+    rng::AbstractRNG=Random.default_rng(),
     idx::T=collect(eachindex(x)),
     buffer::T=similar(idx)) where T <: AbstractVector{<:Integer}
     #

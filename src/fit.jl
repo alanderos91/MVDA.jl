@@ -39,6 +39,8 @@ function solve_unconstrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, pro
     # Initialize iteration counts.
     iters = 0
     nesterov_iter = 1
+    stuck_iters = 0
+    old_grad = state.gradient
 
     for iter in 1:maxiter
         iters += 1
@@ -52,12 +54,19 @@ function solve_unconstrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, pro
 
         # Assess convergence.
         obj = state.objective
-        if state.gradient < gtol
+        if state.gradient < gtol || stuck_iters > 2
             break
         elseif iter < maxiter
-            needs_reset = iter < nesterov || obj > old
+            if isapprox(old_grad, state.gradient; rtol=1e-6)
+                stuck_iters += 1
+                needs_reset = true
+            else
+                stuck_iters = 0
+                needs_reset = iter < nesterov || obj > old
+            end
             nesterov_iter = nesterov_acceleration!(coeff, coeff_prev, nesterov_iter, needs_reset)
             old = obj
+            old_grad = state.gradient
         end
     end
     copyto!(coeff_proj.slope, coeff.slope)
@@ -76,7 +85,7 @@ function solve_constrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, probl
     rho_max::Real=DEFAULT_RHO_MAX,
     rhof::Function=DEFAULT_ANNEALING,
     callback::F=DEFAULT_CALLBACK,
-    rng::AbstractRNG=Random.GLOBAL_RNG,
+    rng::AbstractRNG=Random.default_rng(),
     kwargs...) where{T,F}
     # Check for missing data structures.
     extras = __mm_init__(algorithm, (projection_type, rng), problem, _extras_)
@@ -135,7 +144,7 @@ function solve_constrained!(f::AbstractVDAModel, algorithm::PGD, problem::MVDAPr
     gtol::Real=DEFAULT_GTOL,
     nesterov::Int=DEFAULT_NESTEROV,
     callback::F=DEFAULT_CALLBACK,
-    rng::AbstractRNG=Random.GLOBAL_RNG,
+    rng::AbstractRNG=Random.default_rng(),
     kwargs...,
     ) where {T,F}
     # Check for missing data structures.
@@ -197,7 +206,7 @@ function solve_unconstrained!(f::PenalizedObjective{LOSS,SqDistPenalty}, algorit
     gtol::Real=1e-6,
     nesterov::Int=10,
     callback::F=DEFAULT_CALLBACK,
-    rng::AbstractRNG=Random.GLOBAL_RNG,
+    rng::AbstractRNG=Random.default_rng(),
     ) where {LOSS<:AbstractVDALoss,T,F}
     # Check for missing data structures.
     extras = __mm_init__(algorithm, (projection_type, rng), problem, _extras_)
