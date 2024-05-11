@@ -1,20 +1,20 @@
-using CSV, DataFrames, DelimitedFiles, MLDataUtils, Parameters, ProgressMeter, StableRNGs
-using KernelFunctions, LinearAlgebra, MVDA, Statistics, StatsBase
-using MKL
+#
+#   Set Environment: examples/Project.toml + examples/Manifest.toml
+#
+import Pkg
+Pkg.activate(".")
 
-using MVDA: ZScoreTransform, NormalizationTransform, NoTransformation,
-    maximum_deadzone, make_sparsity_grid, make_log10_grid,
+using MVDA
+using CSV, DataFrames, MLDataUtils
+using Random, StableRNGs
+using KernelFunctions, LinearAlgebra, Statistics, StatsBase
+
+import Base.Iterators
+import MLDataUtils
+using MVDA: ZScoreTransform,
+    NormalizationTransform,
+    NoTransformation,
     HistoryCallback
-
-# Assume we are using MKL with 10 Julia threads on a 10-core machine.
-#
-# MKL and OpenBLAS differ in how they interact with Julia's multithreading.
-# By setting number of threads = 1 we have 1 MKL thread per Julia thread (10 total).
-# 
-# If you remove/comment out the `using MKL` line then you should change this to 10.
-#
-# See: https://carstenbauer.github.io/ThreadPinning.jl/dev/explanations/blas/#Intel-MKL
-# BLAS.set_num_threads(1)
 
 println(
     """
@@ -71,13 +71,13 @@ function run(dir, example, input_data, (ne, ng, nl, ns), projection_type, preshu
     # Epsilon / Deadzone grid.
     e_grid = if ne > 1
         if c > 2
-            1e1 .^ range(-3, log10(maximum_deadzone(problem)), length=ne)
+            1e1 .^ range(-3, log10(MVDA.maximum_deadzone(problem)), length=ne)
         else
             1e1 .^ range(-6, 0, length=ne)
         end
     else
         if c > 2
-            [maximum_deadzone(problem)]
+            [MVDA.maximum_deadzone(problem)]
         else
             [1e-6]
         end
@@ -85,20 +85,20 @@ function run(dir, example, input_data, (ne, ng, nl, ns), projection_type, preshu
 
     # Lambda grid.
     l_grid = if nl > 1
-        sort!(make_log10_grid(-6, 6, nl), rev=true) # large values (less shrinkage) to small values (more shrinkage)
+        sort!(MVDA.make_log10_grid(-6, 6, nl), rev=true) # large values (less shrinkage) to small values (more shrinkage)
     else
         [1.0]
     end
 
     # Gamma / Scale grid.
     g_grid = if ng > 1
-        make_log10_grid(-1, 1, ng)
+        MVDA.make_log10_grid(-1, 1, ng)
     else
         [0.0]
     end
     
     # Sparsity grid.
-    k_grid = round.(Int, nvars .* (1 .- make_sparsity_grid(nvars, ns)))
+    k_grid = round.(Int, nvars .* (1 .- MVDA.make_sparsity_grid(nvars, ns)))
     
     grids = (
         epsilon=e_grid,

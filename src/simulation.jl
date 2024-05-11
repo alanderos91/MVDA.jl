@@ -339,13 +339,15 @@ function synth_assignment(X::AbstractMatrix, B::AbstractMatrix)
     enc = StandardSimplexEncoding(c)
     V = enc.vertex
 
-    # assign classes based on VDA rule
+    # assign classes based on VDA rule, ensuring that class labels are
+    # assigned indices matching that of the vertex encoding
     Y = X*B
     class = Vector{String}(undef, n)
+    unique_label = sort!(["Class $(l)" for l in 1:c])
     for i in 1:n
         yi = view(Y, i, :)
         l = argmin(norm(yi - V[l]) for l in 1:c)
-        class[i] = "Class $(l)"
+        class[i] = unique_label[l]
         yi .= V[l]
     end
 
@@ -394,8 +396,8 @@ end
 #   Synthetic data with feature-heterogeneous classes
 #
 function vdasynth2(n::Integer, p::Integer, c::Integer, k::Vector{T};
-    rng::AbstractRNG=StableRNG(2000),
-    rho::Vector{F}=[0.5],
+    rng::AbstractRNG=Random.default_rng(),
+    rho::Vector{F}=repeat([0.5], c),
     SNR::Real=1.0,
 ) where {T <: Integer, F <: Real}
     # sanity checks
