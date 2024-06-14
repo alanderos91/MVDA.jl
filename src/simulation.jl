@@ -204,76 +204,232 @@ function gaussian_clouds(n::Int, c::Int=3; sigma::Real=1.0, rng::AbstractRNG=Sta
     return target, X
 end
 
-function synthetic(a,b,c,d,e; rng::AbstractRNG=StableRNG(2000), prob::Real=1.0, m::Int=10^3, n::Int=500)
+#
+#   Correlation matrices
+#
+"""
+    cor_toeplitz(p::Integer, rho::Real)
+
+Generate a correlation matrix with Toeplitz structure, `Σ[i,j] = rho^abs(i-j)`.
+"""
+function cor_toeplitz(p::Integer, rho::Real)
+    Σ = zeros(p, p)
+    for j in 1:p, i in j:p
+        Σ[i,j] = rho^abs(i-j)
+    end
+
+    if !isposdef(Symmetric(Σ, :L))
+        error("Toeplitz correlation matrix may not be positive definite.")
+    end
+
+    return Symmetric(Σ, :L)
+end
+
+#
+#   Multivariate Normal deviates
+#
+"""
+    rand_mvn_normal!(rng::AbstractRNG, x::AbstractVector, Σ::AbstractMatrix)
+
+Fill `x` with 0-mean multivariate normal deviates, given the covariance structure `Σ`.
+"""
+function rand_mvn_normal!(rng::AbstractRNG, x::AbstractVector, Σ::AbstractMatrix)
+    rand_mvn_normal!(rng, x, cholesky(Σ))
+end
+
+"""
+    rand_mvn_normal!(rng::AbstractRNG, x::AbstractVector, F::Cholesky)
+
+Fill `x` with 0-mean multivariate normal deviates, given the covariance structure `F.L*F.U`.
+"""
+function rand_mvn_normal!(rng::AbstractRNG, x::AbstractVector, F::Cholesky)
+    randn!(rng, x)
+    lmul!(F.L, x)
+    return x
+end
+
+"""
+    rand_mvn_normal!(rng::AbstractRNG, x::AbstractVector, arr::AbstractVector)
+
+Fill `x` with 0-mean multivariate normal deviates, given the block-diagonal covariance structure specified by components of `arr` (either `AbstractMatrix` or `Cholesky`).
+"""
+function rand_mvn_normal!(rng::AbstractRNG, x::AbstractVector, arr::AbstractVector)
+    a = 1
+    for F in arr
+        m = size(F, 1)
+        b = a + m - 1
+        rand_mvn_normal!(rng, view(x, a:b), F)
+        a = b + 1
+    end
+    return x
+end
+
+"""
+    rand_mvn_normal!(rng::AbstractRNG, X::AbstractMatrix, F)
+
+Fill rows of `X` with 0-mean multivariate normal deviates, given the covariance structure
+implied by `F`.
+"""
+function rand_mvn_normal!(rng::AbstractRNG, X::AbstractMatrix, F)
+    n = size(X, 1)
+    for i in 1:n
+        rand_mvn_normal!(rng, view(X, i, :), F)
+    end
+    return X
+end
+
+#
+#   Covariates with known correlation structure
+#
+function synth_covariates(rng::AbstractRNG, n::Integer, p::Integer, Σ)
+    X = rand_mvn_normal!(rng, Matrix{Float64}(undef, n, p), Σ)
+    # StatsBase.transform!(
+    #     StatsBase.fit(ZScoreTransform, X, dims=1),
+    #     X
+    # )
+    return X
+end
+
+#
+#   Structured coefficient matrices for VDA models
+#
+function synth_coef!(rng::AbstractRNG, b::AbstractVector, k::Integer)
+    for j in 1:k
+        b[j] = rand(rng, (+1, -1))
+    end
+    return b
+end
+
+function synth_coef_hom(rng::AbstractRNG, p::Integer, c::Integer, k::Integer)
+    B = zeros(p, c)
+    idx = randperm(rng, p)[1:k]
+    for l in 1:c
+        synth_coef!(rng, view(B, idx, l), k)
+    end
+    return B, idx
+end
+
+function synth_coef_het(rng::AbstractRNG, p::Integer, c::Integer, k::Integer)
+    B = zeros(p, c)
+    idx = [randperm(rng, p)[1:k] for _ in 1:c]
+    for l in 1:c
+        synth_coef!(rng, view(B, idx[l], l), k[l])
+    end
+    return B, idx
+end
+
+function synth_coef_het(rng::AbstractRNG, p::Integer, c::Integer, k::AbstractVector)
+    B = zeros(p, c)
+    idx = [randperm(rng, p)[1:k[l]] for l in 1:c]
+    for l in 1:c
+        synth_coef!(rng, view(B, idx[l], l), k[l])
+    end
+    return B, idx
+end
+
+#
+#   Class assignment with VDA model
+#
+function synth_assignment(X::AbstractMatrix, B::AbstractMatrix)
+    # dimensions
+    n = size(X, 1)
+    c = size(B, 2)
+
+    # vertex encoding
+    enc = StandardSimplexEncoding(c)
+    V = enc.vertex
+
+    # assign classes based on VDA rule, ensuring that class labels are
+    # assigned indices matching that of the vertex encoding
+    Y = X*B
+    class = Vector{String}(undef, n)
+    unique_label = sort!(["Class $(l)" for l in 1:c])
+    for i in 1:n
+        yi = view(Y, i, :)
+        l = argmin(norm(yi - V[l]) for l in 1:c)
+        class[i] = unique_label[l]
+        yi .= V[l]
+    end
+
+    return class, Y
+end
+
+#
+#   Synthetic data with feature-homogeneous classes
+#
+function vdasynth1(n::Integer, p::Integer, c::Integer, k::Integer;
+    rng::AbstractRNG=Random.default_rng(),
+    rho::Real=0.5,
+    SNR::Real=1.0,
+)
+    # sanity checks
     if n < 2
-        error("Number of features (n=$(n)) should be greater than 2.")
+        error("Number of samples (n=$(n)) should be greater than 1.")
     end
-    if prob < 0 || prob > 1
-        error("Probability (prob=$(prob)) must satisfy 0 ≤ prob ≤ 1.")
+    if k > p
+        error("Number of true predictors (k=$(k)) should be less than total predictors (p=$(p)).")
     end
-
-    # covariance matrix
-    Σ = Matrix{Float64}(c*I, n, n)
-    for j in 1:n, i in j+1:n
-        Σ[j,i] = e
-    end
-    Σ[1,1] = a
-    Σ[2,2] = b
-
-    # Cluster A
-    Σ1 = copy(Σ)
-    Σ1[1,2] = +d
-
-    # Cluster B
-    Σ2 = copy(Σ)
-    Σ2[1,2] = -d
-
-    if !isposdef(Symmetric(Σ1)) || !isposdef(Symmetric(Σ2))
-        error("At least one covariance matrix is not positive definite. Try decreasing parameters d or e relative to a, b, and c.")
+    if SNR <= 0
+        error("SNR must be given as a positive real number.")
     end
 
-    # Simulate instances.
-    X = Matrix{Float64}(undef, m, n)
-    L1, _ = cholesky(Symmetric(Σ1))
-    L2, _ = cholesky(Symmetric(Σ2))
-    cluster = Vector{String}(undef, m)
-    for i in axes(X, 1)
-        # Sample features from Class A
-        if rand(rng) > 0.5
-            @views X[i, :] .= L1*randn(rng, n)
-            cluster[i] = "A"
-        else # Class B
-            @views X[i, :] .= L2*randn(rng, n)
-            cluster[i] = "B"
-        end
-    end
-    
-    StatsBase.transform!(StatsBase.fit(ZScoreTransform, X, dims=1), X)
+    Σ = cor_toeplitz(p, rho)
+    X = synth_covariates(rng, n, p, cholesky!(Σ))
+    B, idx = synth_coef_hom(rng, p, c, k)
+    class, Y = synth_assignment(X, B)
 
-    # Set coefficients
-    beta = zeros(n)
-    beta[1] = 10.0
-    beta[2] = -10.0
+    # shift X to make B closer to the 'true' model wrt VDA
+    sigma = sqrt(mean(var(view(Y, :, l)) for l in axes(Y, 2)) / SNR)
+    D = (view(B, idx, :)' \ (Y - X*B - sigma*randn(rng, n, c))')'
+    X[:, idx] .= view(X, :, idx) + D
 
-    # Assign labels.
-    y, L = Vector{Float64}(undef, m), Vector{String}(undef, m)
-    inversions = 0
-    for i in eachindex(y)
-        xi = view(X, i, :)
-        yi = sign(xi'*beta)
-        if rand(rng) < prob
-            y[i], L[i] = yi, ifelse(yi == 1, "A", "B")
-        else
-            y[i], L[i] = ifelse(cluster[i] == "A", 1, -1), cluster[i]
-            inversions += 1
-        end
-    end
     @info """
-    [ synthetic: $(m) instances / $(n) features ]"
-        ∘ Pr(y | x) = $(prob)
-        ∘ $inversions class inversions ($(inversions/m) Bayes error)
+    [ VDA Synthetic 1: $(n) instances / $(p) features ]
+        ∘ $(k) true features
+        ∘ Homogeneous classes
+        ∘ Toeplitz correlation structure, ρ = $(rho)
     """
-    return L, X
+    return class, Y, X, B
+end
+
+#
+#   Synthetic data with feature-heterogeneous classes
+#
+function vdasynth2(n::Integer, p::Integer, c::Integer, k::Vector{T};
+    rng::AbstractRNG=Random.default_rng(),
+    rho::Vector{F}=repeat([0.5], c),
+    SNR::Real=1.0,
+) where {T <: Integer, F <: Real}
+    # sanity checks
+    if n < 2
+        error("Number of samples (n=$(n)) should be greater than 1.")
+    end
+    if any(>(p), k)
+        error("Number of true predictors (k=$(k)) should be less than total predictors (p=$(p)).")
+    end
+    if SNR <= 0
+        error("SNR must be given as a positive real number.")
+    end
+
+    pg, r = divrem(p, length(rho))
+    Σ = [cor_toeplitz(pg + (g == 1) * r, rho[g]) for g in eachindex(rho)]
+    X = synth_covariates(rng, n, p, cholesky!.(Σ))
+    B, idx = synth_coef_het(rng, p, c, k)
+    class, Y = synth_assignment(X, B)
+
+    # shift X to make B closer to the 'true' model wrt VDA
+    sup = sort!(union(idx...))
+    sigma = sqrt(mean(var(view(Y, :, l)) for l in axes(Y, 2)) / SNR)
+    D = (view(B, sup, :)' \ (Y - X*B - sigma*randn(rng, n, c))')'
+    X[:, sup] .= view(X, :, sup) + D
+    
+    @info """
+    [ VDA Synthetic 2: $(n) instances / $(p) features ]
+        ∘ $(join(k, ", ", " and ")) true features
+        ∘ Heterogeneous classes
+        ∘ Toeplitz correlation structure, ρ = $(rho)
+    """
+    return class, Y, X, B
 end
 
 function spiral(class_sizes;

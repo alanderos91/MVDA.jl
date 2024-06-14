@@ -111,6 +111,10 @@ struct MVDAProblem{T<:AbstractFloat,encT,kernT,labelT,matT,vecT}
         res = allocate_res(T, kernel, n, p, nd)
         grad = allocate_coeff(T, kernel, n, p, nd)
 
+        coeff.slope .= 1
+        coeff_prev.slope .= 1
+        coeff_proj.slope .= 1
+
         # Extract the missing type information.
         matT, vecT = typeof(coeff.slope), typeof(coeff.intercept)
 
@@ -147,7 +151,7 @@ samples/instances aligned along rows (e.g. `data[i,:]` is sample `i`).
 function MVDAProblem{T}(data_L, data_X;
     encoding::Symbol=:projected,
     intercept::Bool=true,
-    kernel::Union{Nothing,Kernel}=nothing) where {T,encT}
+    kernel::Union{Nothing,Kernel}=nothing) where {T}
     #
     labels = sort!(unique(data_L))
     K = length(labels)
@@ -341,27 +345,11 @@ function __classify__(problem::MVDAProblem, Y::AbstractMatrix)
     @unpack encoding, labels = problem
     n = size(Y, 1)
     L = Vector{eltype(labels)}(undef, n)
-    num_julia_threads = Threads.nthreads()
 
-    if num_julia_threads == 1
-        buffer = similar(Y, size(Y, 2))
-        for i in axes(Y, 1)
-            y = view(Y, i, :)
-            L[i] = __classify__(problem, y, buffer=buffer)
-        end
-    else
-        workers = [similar(Y, size(Y, 2)) for _ in 1:num_julia_threads]
-        num_BLAS_threads = BLAS.get_num_threads()
-        try
-            BLAS.set_num_threads(1)
-            @batch per=core for i in axes(Y, 1)
-                y = view(Y, i, :)
-                local_buffer = workers[Threads.threadid()]
-                L[i] = __classify__(problem, y, buffer=local_buffer)
-            end
-        finally
-            BLAS.set_num_threads(num_BLAS_threads)
-        end
+    buffer = similar(Y, size(Y, 2))
+    for i in axes(Y, 1)
+        y = view(Y, i, :)
+        L[i] = __classify__(problem, y, buffer=buffer)
     end
 
     return L

@@ -10,9 +10,6 @@ using MLDataUtils: ObsDimension
 using Parameters
 using KernelFunctions, LinearAlgebra, Random, StableRNGs, Statistics, StatsBase
 
-# Multithreading
-using Polyester
-
 # Imports
 import Base: show, iterate
 import MLDataUtils: classify, predict, ind2label, label2ind, isposlabel, isneglabel, islabelenc
@@ -100,6 +97,7 @@ include("problem.jl")
 include("transform.jl")
 include("utilities.jl")
 include("projections.jl")
+include("models.jl")
 include("callbacks.jl")
 
 abstract type AbstractMMAlg end
@@ -128,6 +126,11 @@ include("cv.jl")
 export MVDAProblem, probdims, maximum_deadzone
 export MMSVD, SD, PGD
 export VerboseCallback
-export L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection
+export L0Projection, HomogeneousL0Projection, HeterogeneousL0Projection,
+    L1BallProjection, HomogeneousL1BallProjection, HeterogeneousL1BallProjection,
+    L2BallProjection, HomogeneousL2BallProjection, HeterogeneousL2BallProjection
+export UnpenalizedObjective, PenalizedObjective, RidgePenalty,
+    SquaredDistancePenalty, SqDistPenalty,
+    SquaredEpsilonInsensitiveLoss, SqEpsilonLoss
 
 end

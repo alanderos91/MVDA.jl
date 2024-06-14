@@ -1,20 +1,22 @@
-using CSV, DataFrames, DelimitedFiles, MLDataUtils, Parameters, ProgressMeter, StableRNGs
-using KernelFunctions, LinearAlgebra, MVDA, Statistics, StatsBase
-using MKL
+#
+#   Set Environment: examples/Project.toml + examples/Manifest.toml
+#
+import Pkg
+Pkg.activate(".")
 
-using MVDA: ZScoreTransform, NormalizationTransform, NoTransformation,
-    maximum_deadzone, make_sparsity_grid, make_log10_grid,
+using MVDA
+using CSV, DataFrames, MLDataUtils
+using Random, StableRNGs
+using KernelFunctions, LinearAlgebra, Statistics, StatsBase
+
+import Base.Iterators
+import MLDataUtils
+using MVDA: ZScoreTransform,
+    NormalizationTransform,
+    NoTransformation,
     HistoryCallback
 
-# Assume we are using MKL with 10 Julia threads on a 10-core machine.
-#
-# MKL and OpenBLAS differ in how they interact with Julia's multithreading.
-# By setting number of threads = 1 we have 1 MKL thread per Julia thread (10 total).
-# 
-# If you remove/comment out the `using MKL` line then you should change this to 10.
-#
-# See: https://carstenbauer.github.io/ThreadPinning.jl/dev/explanations/blas/#Intel-MKL
-# BLAS.set_num_threads(1)
+BLAS.set_num_threads(Threads.nthreads())
 
 println(
     """
@@ -42,16 +44,17 @@ function get_data_transform(kwargs)
     return data_transform
 end
 
-function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
+function run(dir, example, input_data, (ne, ng, nl, ns), projection_type, preshuffle::Bool=false;
     at::Real=0.8,
     nfolds::Int=5,
     nreplicates::Int=50,
     intercept::Bool=true,
     kernel::Union{Nothing,Kernel}=nothing,
+    seed::Int=1903,
     kwargs...
     )
     # Shuffle data before splitting.
-    rng = StableRNG(1903)
+    rng = StableRNG(seed)
     if preshuffle
         data = getobs(shuffleobs(input_data, ObsDim.First(), rng), ObsDim.First())
     else
@@ -59,25 +62,25 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
     end
 
     # Create MVDAProblem instance w/o kernel and construct grids.
-    problem = MVDAProblem(data[1], data[2], intercept=intercept, kernel=kernel)
+    problem = MVDAProblem(data[1], data[2], intercept=intercept, kernel=kernel, encoding=:standard)
     n, p, c = MVDA.probdims(problem)
     n_train = round(Int, n * at * (nfolds-1)/nfolds)
     n_validate = round(Int, n * at * 1/nfolds)
     n_test = round(Int, n * (1-at))
     nvars = ifelse(problem.kernel isa Nothing, p, n_train)
 
-    @info "Created MVDAProblem for $(example)" samples=n features=p classes=c
+    @info "Created MVDAProblem for $(example)" samples=n features=p classes=c projection=projection_type
 
     # Epsilon / Deadzone grid.
     e_grid = if ne > 1
         if c > 2
-            1e1 .^ range(-3, log10(maximum_deadzone(problem)), length=ne)
+            1e1 .^ range(-3, log10(MVDA.maximum_deadzone(problem)), length=ne)
         else
             1e1 .^ range(-6, 0, length=ne)
         end
     else
         if c > 2
-            [maximum_deadzone(problem)]
+            [MVDA.maximum_deadzone(problem)]
         else
             [1e-6]
         end
@@ -85,26 +88,32 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
 
     # Lambda grid.
     l_grid = if nl > 1
-        make_log10_grid(-6, 6, nl)
+        sort!(MVDA.make_log10_grid(-6, 6, nl), rev=true) # large values (less shrinkage) to small values (more shrinkage)
     else
         [1.0]
     end
 
     # Gamma / Scale grid.
     g_grid = if ng > 1
-        make_log10_grid(-3, 1, ng)
+        MVDA.make_log10_grid(-1, 1, ng)
     else
         [0.0]
     end
     
     # Sparsity grid.
-    s_grid = make_sparsity_grid(nvars, ns)
+    k_grid = MVDA.make_sparsity_grid(nvars, ns)
     
-    grids = (e_grid, l_grid, g_grid, s_grid)
+    grids = (
+        epsilon=e_grid,
+        lambda=l_grid,
+        gamma=g_grid, 
+        k=k_grid,
+    )
 
     # other settings
     scoref = MVDA.accuracy
-    example_dir = joinpath(dir, example)
+    proj = string(projection_type)
+    example_dir = joinpath(dir, example, proj)
     if !ispath(example_dir)
         mkpath(example_dir)
         @info "Created directory for example $(example)" output_dir=example_dir
@@ -113,7 +122,8 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
     # Collect data for cross-validation replicates.
     @info "CV split: $(n_train) Train / $(n_validate) Validate / $(n_test) Test"
     
-    MVDA.repeated_cv(MMSVD(), problem, grids;
+    model = PenalizedObjective(SqEpsilonLoss(), SqDistPenalty())
+    MVDA.repeated_cv(model, MMSVD(), problem, grids;
         dir=example_dir,        # directory to store all results
         title=example,
         overwrite=true,
@@ -122,13 +132,15 @@ function run(dir, example, input_data, (ne, ng, nl, ns), preshuffle::Bool=false;
         nreplicates=nreplicates,# number of CV replicates
         nfolds=nfolds,          # propagate number of folds
         rng=rng,                # random number generator for reproducibility
+        
+        projection_type=projection_type,
 
         scoref=scoref,          # scoring function; use prediction accuracy
         by=:validation,         # use accuracy on validation set to select hyperparameters
         minimize=false,         # maximize prediction accuracy
 
         maxrhov=10^2,           # outer iterations
-        maxiter=10^5,           # inner iterations
+        maxiter=10^4,           # inner iterations
         gtol=1e-3,              # tolerance on gradient for convergence of inner problem
         dtol=1e-3,              # tolerance on distance for convergence of outer problem
         rtol=0.0,               # use strict distance criteria

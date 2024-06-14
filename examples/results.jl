@@ -1,8 +1,44 @@
-using MVDA, CairoMakie, CSV, DataFrames, Statistics, StatsBase, Latexify, LaTeXStrings, LinearAlgebra
+using MVDA
+using MVDA.DataDeps
+using CSV, DataFrames, DataFramesMeta, Latexify, LaTeXStrings, CairoMakie
+using Statistics, StatsBase, LinearAlgebra
+using Printf
 
-SETTINGS = Dict(:resolution => 72 .* (8.5*0.9, 11*0.3), :fontsize => 8)
+const SETTINGS = Dict(
+    :resolution => 72 .* (8.5*0.9, 11*0.3),
+    :paper_size => (8.5, 11.0),
+    :resolution_scaling_factor => 72,
+    :fontsize => 8
+)
+
+const ABBREVIATIONS = Dict(
+    "HomogeneousL0Projection" => "HomL0",
+    "HeterogeneousL0Projection" => "HetL0",
+    "HomogeneousL1BallProjection" => "HomL1",
+    "HeterogeneousL1BallProjection" => "HetL1",
+)
 
 ##### Helper functions #####
+function load_synth1_data(dir::AbstractString)
+    data = CSV.read(joinpath(dir, "synth_homogeneous.csv"), DataFrame)
+    transform!(data, [:true_features, :active_features] => ByRow((x, y) -> x / y) => :ppv)
+    transform!(data, [:true_features, :k] => ByRow((x, y) -> x / y) => :tpr)
+    transform!(data, [:accuracy_train, :accuracy_test] => ByRow((x, y) -> x - y) => :test_train_gap)
+    return data
+end
+
+function load_synth2_data(dir::AbstractString)
+    parse_vec(x) = [parse(Int, x.match) for x in eachmatch(r"\d+", x)]
+    data = CSV.read(joinpath(dir, "synth_heterogeneous.csv"), DataFrame)
+    for col in (:active_features, :true_features, :false_features)
+        transform!(data, col => ByRow(parse_vec) => col)
+    end
+    transform!(data, [:true_features, :active_features] => ByRow((x, y) -> mean(replace(x ./ y, NaN => 0.0))) => :ppv)
+    transform!(data, [:true_features, :k, :c] => ByRow((x, y, z) -> mean(x ./ (y ./ z))) => :tpr)
+    transform!(data, [:accuracy_train, :accuracy_test] => ByRow((x, y) -> mean(x .- y)) => :test_train_gap)
+    return data
+end
+
 function plot_cv_path(path_df, nvars; kwargs...)
     fig = Figure()
     ax = Axis(fig[1,1];
@@ -12,7 +48,7 @@ function plot_cv_path(path_df, nvars; kwargs...)
         xticks = LinearTicks(min(16, nvars)),
         xlabel="Number of active variables",
         ylabel = "Classification Error",
-        limits=(-1, nvars+1, 0, 1),
+        limits=(-1, nvars+1, 0, 100),
         yticks = LinearTicks(5),
         kwargs...
     )
@@ -24,31 +60,32 @@ function plot_cv_path(path_df, nvars; kwargs...)
 end
 
 function plot_cv_path!(ax, path_df, nvars)
-    path_gdf = groupby(path_df, [:title, :algorithm, :replicate, :sparsity])
+    path_gdf = groupby(path_df, [:title, :algorithm, :replicate, :k])
     score_df = combine(path_gdf, :validation => mean => identity)
 
     for df in groupby(score_df, :replicate)
-        xs = round.(Int, nvars * (1 .- df.sparsity))
-        ys = 1 .- df.validation
+        xs = df.k
+        ys = 100 .* (1 .- df.validation)
         lines!(ax, xs, ys, color=(:black, 0.1), linewidth=3)
     end
 
-    avg_path = combine(groupby(score_df, :sparsity), :validation => mean => identity)
-    xs = round.(Int, nvars * (1 .- avg_path.sparsity))
-    ys = 1 .- avg_path.validation
+    avg_path = combine(groupby(score_df, :k), :validation => mean => identity)
+    xs = avg_path.k
+    ys = 100 .* (1 .- avg_path.validation)
     lines!(ax, xs, ys, color=:red, linewidth=2, linestyle=:dash)
 
     return ax
 end
 
-load_dfs(dir, example) = (
-    CSV.read(joinpath(dir, example, "cv_path.out"), DataFrame),
-    CSV.read(joinpath(dir, example, "modelA", "summary.out"), DataFrame),
-    CSV.read(joinpath(dir, example, "modelB", "summary.out"), DataFrame)
+load_dfs(dir, example, proj) = (
+    CSV.read(joinpath(dir, example, proj, "cv_tune.out"), DataFrame),
+    CSV.read(joinpath(dir, example, proj, "cv_path.out"), DataFrame),
+    CSV.read(joinpath(dir, example, proj, "modelA", "summary.out"), DataFrame),
+    CSV.read(joinpath(dir, example, proj, "modelB", "summary.out"), DataFrame)
 )
 
-function load_replicate_data(dir, example, model, filename)
-    example_dir = joinpath(dir, example, model)
+function load_replicate_data(dir, example, proj, model, filename)
+    example_dir = joinpath(dir, example, proj, model)
     dirs = readdir(example_dir, join=true)
     filter!(isdir, dirs)
 
@@ -62,12 +99,12 @@ function load_replicate_data(dir, example, model, filename)
     return df
 end
 
-load_hist(dir, example, model) = load_replicate_data(dir, example, model, "history.out")
-load_cmat(dir, example, model) = load_replicate_data(dir, example, model, "confusion_matrix.out")
-load_prob(dir, example, model) = load_replicate_data(dir, example, model, "probability_matrix.out")
+load_hist(dir, example, proj, model) = load_replicate_data(dir, example, proj, model, "history.out")
+load_cmat(dir, example, proj, model) = load_replicate_data(dir, example, proj, model, "confusion_matrix.out")
+load_prob(dir, example, proj, model) = load_replicate_data(dir, example, proj, model, "probability_matrix.out")
 
-function load_coefficients(dir, example, model)
-    example_dir = joinpath(dir, example, model)
+function load_coefficients(dir, example, projection, model)
+    example_dir = joinpath(dir, example, projection, model)
     dirs = readdir(example_dir, join=true)
     filter!(isdir, dirs)
 
@@ -108,7 +145,17 @@ function plot_convergence_data(df)
     return fig
 end
 
-function save_table(filepath, df, header)
+function save_table(filepath, df::DataFrame, ::Nothing)
+    table_str = latexify(df,
+        latex=false,
+        env=:table,
+        booktabs=true,
+        adjustment=:l
+    )
+    write(filepath, table_str)
+end
+
+function save_table(filepath, df::DataFrame, header)
     table_str = latexify(df,
         latex=false,
         env=:table,
@@ -119,392 +166,544 @@ function save_table(filepath, df, header)
     write(filepath, table_str)
 end
 
+function save_table(filepath, table_str::String, ::Any)
+    write(filepath, table_str)
+end
+
 ##### Figures #####
 
-function synthetic_coefficients(dir)
-    mse(x, y) = mean( (x .- y) .^ 2 )
-
-    arrA = load_coefficients(dir, "synthetic", "modelA")
-    arrB = load_coefficients(dir, "synthetic", "modelB")
-
-    modelA = (; x1=Float64[], x2=Float64[])
-    modelB = (; x1=Float64[], x2=Float64[])
-    for (A, B) in zip(arrA, arrB)
-        push!(modelA.x1, A.coeff_proj.slope[1])
-        push!(modelA.x2, A.coeff_proj.slope[2])
-        push!(modelB.x1, B.coeff.slope[1])
-        push!(modelB.x2, B.coeff.slope[2])
-    end
-
-    global SETTINGS
-    fig = Figure(resolution=SETTINGS[:resolution], fontsize=SETTINGS[:fontsize])
-    g = fig[1,1] = GridLayout()
-
-    Box(g[1,2], color=:gray90, tellwidth=false)
-    Label(g[1,2], "Sparse Model", tellwidth=false)
-
-    Box(g[1,3], color=:gray90, tellwidth=false)
-    Label(g[1,3], "Reduced Model", tellwidth=false)
-    
-    Box(g[1,4], color=:gray90, tellwidth=false)
-    Label(g[1,4], "Difference", tellwidth=false)
-
-    Box(g[2,1], color=:gray90, tellheight=false)
-    Label(g[2,1], "Feature 1", rotation=pi/2, tellheight=false)
-    
-    Box(g[3,1], color=:gray90, tellheight=false)
-    Label(g[3,1], "Feature 2", rotation=pi/2, tellheight=false)
-
-    ax = [Axis(g[i+1,j+1]) for i in 1:2, j in 1:3]
-
-    hist!(ax[1,1], modelA.x1)
-    hist!(ax[1,2], modelB.x1)
-    hist!(ax[1,3], modelA.x1 .- modelB.x1)
-    hist!(ax[2,1], modelA.x2)
-    hist!(ax[2,2], modelB.x2)
-    hist!(ax[2,3], modelA.x2 .- modelB.x2)
-
-    Label(g[4,2:4], "Estimated Value")
-
-    colgap!(g, 5)
-    rowgap!(g, 5)
-
-    return fig
-end
-
-function synthetic_summary(dir)
-    path_df1, _, _ = load_dfs(dir, "synthetic")
-    path_df2, _, _ = load_dfs(dir, "synthetic-hard")
-    
-    hist1 = load_hist(dir, "synthetic", "modelA")
-    hist2 = load_hist(dir, "synthetic-hard", "modelA")
-
-    nvars = 500
-    kwargs = (;
-        xreversed=true,
-        xticks = LinearTicks(min(11, nvars)),
-        limits=(-1, nvars+1, 0, 1),
-        yticks = LinearTicks(5),
-    )
-
-    global SETTINGS
-    fig = Figure(resolution=SETTINGS[:resolution], fontsize=SETTINGS[:fontsize])
-    g = fig[1,1] = GridLayout()
-
-    Box(g[1,2:3], color=:gray90, tellheight=false)
-    Label(g[1,2:3], "Classification error", tellwidth=false)
-    
-    Box(g[1,4], color=:gray90, tellheight=false)
-    Label(g[1,4], "Gradient norm", tellwidth=false)
-
-    Box(g[1,5], color=:gray90, tellheight=false)
-    Label(g[1,5], "Objective", tellwidth=false)
-
-    Box(g[2,1], color=:gray90, tellheight=false)
-    Label(g[2,1], "synthetic", rotation=pi/2, tellheight=false)
-    
-    Box(g[3,1], color=:gray90, tellheight=false)
-    Label(g[3,1], "synthetic-hard", rotation=pi/2, tellheight=false)
-
-    Label(g[4,2:3], "Number of active variables", tellwidth=false)
-    Label(g[4,4:5], "Iteration", tellwidth=false)
-
-    left_panels = [Axis(g[i+1,2:3]; kwargs...) for i in 1:2]
-    right_panels = [Axis(g[i+1,j+1], xticks=LinearTicks(5)) for i in 1:2, j in 3:4]
-    ax = [ left_panels right_panels ]
-
-    linkxaxes!(ax[1,2], ax[1,3])
-    linkxaxes!(ax[2,2], ax[2,3])
-
-    linkyaxes!(ax[1,2], ax[2,2])
-    linkyaxes!(ax[1,3], ax[2,3])
-
-    plot_cv_path!(ax[1,1], path_df1, nvars)
-    plot_cv_path!(ax[2,1], path_df2, nvars)
-
-    for df in groupby(hist1, :replicate)
-        lines!(ax[1,2], log10.(df.gradient), color=(:black, 0.2))
-        lines!(ax[1,3], log10.(df.objective), color=(:black, 0.2))
-    end
-    for df in groupby(hist2, :replicate)
-        lines!(ax[2,2], log10.(df.gradient), color=(:black, 0.2))
-        lines!(ax[2,3], log10.(df.objective), color=(:black, 0.2))
-    end
-
-    colgap!(g, 5)
-    rowgap!(g, 5)
-    rowgap!(g, 3, 1)
-
-    return fig
-end
-
-
-function cancer_size_distributions(dir)
+function cancer_size_distributions(dir, projection)
     examples = [
         "colon" "srbctA" "leukemiaA"
         "lymphomaA" "brain" "prostate"
     ]
 
     titles = [
-        latexstring("Colon ", L"(p=2000)") latexstring("SRBCT ", L"(p=2308)") latexstring("Leukemia ", L"(p=3571)")
-        latexstring("Lymphoma ", L"(p=4026)") latexstring("Brain ", L"(p=5597)") latexstring("Prostate ", L"(p=6033)")
+        "Colon (p = 2000)" "SRBCT (p = 2308)" "Leukemia (p = 3571)"
+        "Lymphoma (p = 4026)" "Brain (p = 5597)" "Prostate (p = 6033)"
     ]
 
     global SETTINGS
-    fig = Figure(resolution=SETTINGS[:resolution], fontsize=SETTINGS[:fontsize])
-    g = fig[1,1] = GridLayout()
+    fz = SETTINGS[:fontsize]
+    fig = Figure(size=(SETTINGS[:resolution][1], SETTINGS[:resolution][2]*1.25), fontsize=SETTINGS[:fontsize])
+    g = fig[1,1] = GridLayout(alignmode=Outside(5))
+    common_options = (;
+        titlesize=1.25*fz,
+        xticklabelsize=fz,
+        yticklabelsize=fz,
+        xticks=LinearTicks(9),
+        xticklabelrotation=pi/6,
+        xlabelpadding=0,
+        ylabelpadding=0,
+    )
 
-    Label(g[3, 2:4], "Number of active features")
-    Label(g[1:2, 1], "Frequency", rotation=pi/2)
-    ax = [Axis(g[i,j+1], title=titles[i,j]) for i in 1:2, j in 1:3]
+    Label(g[3, 2:4], "Number of active features", fontsize=1.25*fz, tellwidth=false)
+    Label(g[1:2, 1], "Frequency", rotation=pi/2, fontsize=1.25*fz, tellheight=false)
+    ax = [Axis(g[i,j+1]; title=titles[i,j], common_options...) for i in 1:2, j in 1:3]
     linkyaxes!(ax...)
 
     for j in 1:3, i in 1:2
-        _, modelA, _ = load_dfs(dir, examples[i,j])
-        hist!(ax[i,j], modelA.active_variables, bins=20)
+        _, _, modelA, _ = load_dfs(dir, examples[i,j], projection)
+        hist!(ax[i,j], modelA.active_variables, bins=32)
     end
 
     colgap!(g, 5)
     rowgap!(g, 5)
+    resize_to_layout!(fig)
 
     return fig
 end
 
-function TCGA_topgenes()
+function TCGA_topgenes(dir, projection)
+    global SETTINGS
+    fz = SETTINGS[:fontsize]
+
+    df = MVDA.dataset("TCGA-HiSeq")
+    L, X = Vector{String}(df[!,1]), Matrix{Float64}(df[!,2:end])
+    problem = MVDAProblem(L, X, intercept=false, encoding=:standard)
+    class_reference = problem.labels
+    n_classes = length(class_reference)
+
     gene_reference = CSV.read("/home/alanderos/Downloads/TCGA-PANCAN-HiSeq-genes.csv", DataFrame)[!,:symbol]
-    selected_genes = CSV.read("/home/alanderos/.julia/datadeps/MVDA/TCGA-HiSeq.cols", DataFrame, header=false)[1:end-2,1]
+    selected_genes = CSV.read(datadep"MVDA/TCGA-HiSeq.cols", DataFrame, header=false)[1:end-2,1]
     genes = gene_reference[selected_genes]
+    common_kwargs = (;
+        titlesize=1.25*fz,
+        xticklabelsize=fz,
+        xticklabelrotation=pi/4,
+        yticks=LinearTicks(6),
+    )
 
     find_nz(x) = findall(x -> norm(x) != 0, eachrow(x))
-    coeff = [MVDA.load_model("/home/alanderos/Desktop/VDA-Results/linear/TCGA-HiSeq/modelA/$(k)").coeff_proj.slope for k in 1:10]
-    effect_size = map(x -> map(norm, eachrow(x)), coeff)
-    nz_row = map(find_nz, coeff)
-    nz_row_idx = [sortperm(effect_size[k][nz_row[k]], rev=true) for k in eachindex(nz_row)]
-    gene_idx = [nz_row[k][nz_row_idx[k]] for k in eachindex(nz_row)]
-    gene_subsets = map(idx -> genes[idx], gene_idx)
+    coeff = [MVDA.load_model(joinpath(dir, "TCGA-HiSeq", projection, "modelA", "$(k)")).coeff_proj.slope for k in 1:10]
 
-    cm = Dict{String,Int}()
-    for subset in gene_subsets, gene in subset
-        cm[gene] = 1 + get(cm, gene, 0)
+    # compute counts and average coefficients
+    gene_count = zeros(Int, size(coeff[1]))
+    for i in axes(gene_count, 2)
+        eff = map(x -> vec(x[:, i]), coeff)
+        nz_row = map(find_nz, eff)
+        for arr in nz_row, j in arr
+            gene_count[j, i] += 1
+        end
+    end
+    nz_counts = copy(gene_count)
+    replace!(nz_counts, 0 => 1)
+    scaled_avg_effect_size = (1 ./ nz_counts) .* sum(coeff)
+
+    # init plot
+    resolution, factor = SETTINGS[:paper_size], SETTINGS[:resolution_scaling_factor]
+    resolution = (factor * 0.95 * resolution[1], factor * 0.17 * n_classes * resolution[2])
+    coeff_abs_max = 1e-1
+    crange = [-coeff_abs_max, coeff_abs_max] * 1e4
+    cscale = Makie.Symlog10(-10, 10)
+    cmap = cgrad(:RdBu, 1001, scale=cscale)
+
+    fig = Figure(size=resolution, fontsize=fz)
+    g = GridLayout(fig[1,1])
+    ax = [Axis(g[j,1]; common_kwargs...) for j in 1:n_classes]
+    for i in eachindex(ax)
+        coeff_i = scaled_avg_effect_size[:, i] * 1e4
+        count_i = gene_count[:, i]
+        gene_key = copy(genes)
+
+        # Rank the genes from most replicated to least replicated
+        idx = sortperm(count_i, rev=true)
+        gene_key, count_i, coeff_i = gene_key[idx], count_i[idx], coeff_i[idx]
+        topK = min(length(find_nz(count_i)), 50)
+
+        xlims!(ax[i], low=0, high=topK+1)
+        barplot!(ax[i], count_i[1:topK];
+            color=coeff_i[1:topK],
+            colormap=cmap,
+            colorrange=crange,
+            colorscale=cscale,
+            direction=:y,
+        )
+        ax[i].title = "$(class_reference[i])"       # TCGA cancer
+        ax[i].xticks = (1:topK, gene_key[1:topK])   # label genes
     end
 
-    gene_key, gene_count = collect(keys(cm)), collect(values(cm))
-    idx = sortperm(gene_count, rev=true)
-    gene_key, gene_count = gene_key[idx], gene_count[idx]
+    # Set common x-label
+    Label(g[2:end-1, 0], "Frequency", fontsize=1.25*fz, rotation=pi/2)
 
-    topK = min(length(gene_count), 50)
-
-    global SETTINGS
-    fig = Figure(resolution=SETTINGS[:resolution], fontsize=SETTINGS[:fontsize])
-    ax = Axis(fig[1,1], xticks=(1:topK, gene_key[1:topK]), xticklabelrotation=pi/6, ylabel="Frequency", yticks=LinearTicks(6))
-    barplot!(ax, gene_count[1:topK],
-        # bar_labels=gene_count[1:topK],
-        # label_size=SETTINGS[:fontsize],
+    # Set common colorbar
+    Colorbar(g[2:end-1, 2];
+        label="Slope Coefficient × 10⁴",
+        labelsize=1.25*fz,
+        colormap=cmap,
+        colorrange=crange,
+        scale=cscale,
+        # vertical=false,
+        # flipaxis=false,
+        labelpadding=0,
+        ticks=[-1000, -100, -10, 0, 10, 100, 1000],
     )
+
+    colgap!(g, 1, 5)
+    rowgap!(g, 0)
 
     return fig
 end
 
-function MS_error_rates(dir)
+function boxplot_summary(df, metric, metric_label,
+    yticks=LinearTicks(11), ymin=nothing, ymax=nothing;
+    size=(800, 600)
+)
     #
-    function load_and_convert(dir, example, idx)
-        df = load_cmat(dir, example, "modelA")
-        filter!(:subset => isequal("test"), df)
-        gdf = groupby(df, :replicate)
-        C = [Matrix{Float64}(gdf[k][!,idx]) for k in eachindex(gdf)]
-        P = map(Ck -> Ck ./ sum(Ck, dims=2), C)
-        return P
+    global SETTINGS
+    fz = SETTINGS[:fontsize]
+
+    ns = sort!(unique(df.n))
+    cs = sort!(unique(df.c))
+    snrs = sort!(unique(df.SNR))
+    
+    palette = Makie.wong_colors()
+    solvers = unique(df.solver)
+    solver_bin = Dict(solver => k for (k, solver) in enumerate(solvers))
+    subplot_label = string.('A':'Z')
+
+    fig = Figure(size=size, fontsize=fz)
+    grd = GridLayout(fig[1,1])
+    axs = []
+    for j in eachindex(cs), i in eachindex(ns)
+        n = ns[i]
+        c = cs[j]
+        
+        srd = GridLayout(grd[i, j], alignmode=Outside(5))
+        box = Box(grd[i, j], cornerradius=0, color=:transparent, strokecolor=:lightgray)
+        Makie.translate!(box.blockscene, 0, 0, -100)
+
+        Label(srd[1, 1], subplot_label[length(ns)*(j-1)+i],
+            halign = :left,
+            valign = :top,
+            font = :bold,
+            fontsize = 1.25*fz,
+            padding = (3, 0, 0, 0),
+            tellwidth=false,
+            tellheight=false,
+        )
+        Label(srd[1, 2], "n = $(n), c = $(c)";
+            halign = :center,
+            valign = :bottom,
+            font = :bold,
+            fontsize = 1.25fz,
+            padding = (0, 0, 0, 0),
+            tellwidth=false,
+        )
+
+        if isnothing(ymin) && isnothing(ymax)
+            _ymin, _ymax = extrema(@rsubset(df, :n == n, :p == 1000, :c == c, :k == 30)[!, metric])
+            _ymin, _ymax = _ymin*0.95, _ymax*1.05
+        else
+            _ymin, _ymax = ymin, ymax
+        end
+
+        for k in eachindex(snrs)
+            snr = snrs[k]
+
+            data_subset = @rsubset(df, :n == n, :p == 1000, :c == c, :k == 30, :SNR == snr)
+            sort!(data_subset, :rho, lt=isless, rev=false)
+            rhos = sort!(unique(data_subset.rho))
+
+            # itr = Iterators.product(SNRs, rhos) # SNRs increases first
+            # scenarios = [(rho, SNR) => idx for (idx, (SNR, rho)) in enumerate(itr)] |> vec
+            scenario_bin = Dict(rho => idx for (idx, rho) in enumerate(rhos))
+            xticklabels = ["ρ = $(rho)" for rho in rhos]
+
+            categories, dodge, colors = Int[], Int[], []
+            for row in eachrow(data_subset)
+                scenario_idx = scenario_bin[row.rho]
+                solver_idx = solver_bin[row.solver]
+                push!(categories, scenario_idx)
+                push!(dodge, solver_idx)
+                push!(colors, palette[solver_idx])
+            end
+
+            # Label(srd[2, k], "SNR = $(snr)";
+            Label(srd[k+1, 1], "SNR = $(snr)";
+                # valign = :bottom,
+                fontsize = 1.2*fz,
+                font = :bold,
+                padding=(0.5, 0.5, 0.5, 0.5),
+                # tellwidth=false,
+                # tellheight=false,
+                rotation=pi/2,
+            )
+
+            xticks = (eachindex(xticklabels), xticklabels)
+            # ax = Axis(srd[3, k];
+            ax = Axis(srd[k+1, 2];
+                xticks=xticks,
+                xticklabelsvisible=(k == length(snrs)),
+                # xticks=yticks,
+                xticklabelsize=1.1*fz,
+                xlabelpadding=0,
+                # xticklabelrotation=pi/8,
+                # ylabel=metric_label,
+                ylabelsize=fz,
+                yticks=yticks,
+                # yticks=(eachindex(xticklabels), xticklabels),
+                yticklabelsize=fz,
+                ylabelpadding=0,
+                ygridvisible=true,
+                # yreversed=true,
+                limits=(0.5, length(rhos)+0.5, _ymin, _ymax),
+                # limits=(_ymin, _ymax, 0.5, length(rhos)+0.5),
+            )
+            push!(axs, ax)
+            boxplot!(ax, categories, data_subset[!, metric];
+                label=Vector(data_subset[!, :solver]),
+                color=colors,
+                dodge=dodge,
+                # orientation=:horizontal,
+            )
+        end
+        colgap!(srd, 10)
+        rowgap!(srd, 10)
+        rowgap!(srd, 1, 2)
     end
-    #
-    function plot_confusion_matrix!(ax, data)
-        heatmap!(ax, data, colormap=:Blues, colorrange=(0,1))
-        str = vec(map(x -> string(round(x, sigdigits=3)), data))
-        pos = vec([(i,j) for i in axes(data, 1), j in axes(data, 2)])
-        text!(ax, str,
-            position=pos,
-            textsize=8,
-            align=(:center,:center),
-            color=map(x -> x/sum(data) > 1/length(data) ? :white : :black, vec(data)),
+
+    Label(grd[0, 1:length(cs)], metric_label;
+        # rotation=pi/2,
+        fontsize=1.5*fz,
+        font=:bold,
+        # tellheight=false,
+    )
+    solvers = unique(df.solver)
+    Legend(grd[length(ns)+1, 1:length(cs)],
+        [PolyElement(color=palette[solver_bin[s]], strokecolor=:transparent) for s in solvers],
+        solvers,
+        "Methods";
+        titlegap=0,
+        patchsize=(30, 5),
+        titlesize=1.25*fz,
+        labelsize=1.1*fz,
+        labelfont=:bold,
+        framevisible=false,
+        orientation=:horizontal
+    )
+
+    colgap!(grd, 10)
+    rowgap!(grd, 8)
+    resize_to_layout!(fig)
+
+    return fig, grd, axs
+end
+
+function draw_time_boxplot(data)
+    global SETTINGS
+    C, sz = SETTINGS[:resolution_scaling_factor], SETTINGS[:paper_size]
+    fig, grd, axs = with_theme(theme_minimal(), figure_padding=5) do
+        boxplot_summary(
+            data,
+            :time, "Time [seconds]", LinearTicks(9);
+            size = (0.9 * C * sz[1], 0.5 * C * sz[2]),
         )
     end
-    #
-    examples = ["all", "dropC", "dropB", "dropA"]
-    example_labels = ["All", "Drop Class C", "Drop Class B", "Drop Class A"]
-    example_titles = ["All" "Drop Class C"; "Drop Class B" "Drop Class A"]
-    classes = ["A", "B", "C"]
-    tick_set = [
-        (1:3, classes) (1:2, classes[[1,2]]);
-        (1:2, classes[[1,3]]) (1:2, classes[[2,3]])
-    ]
-    kwargs = (;
-        xlabel="Class",
-        ylabel="Predicted",
-        xticksize=0,
-        yticksize=0,
-        yreversed=true,
-    )
+    return fig
+end
 
-    xs, ys, dodge = Int[], Float64[], Int[]
-
-    for (k, example) in enumerate(examples)
-        _, modelA, modelB = load_dfs(dir, example)
-        for (accA, accB) in zip(modelA.test, modelB.test)
-            # sparse model
-            push!(xs, k)
-            push!(ys, 1-accA)
-            push!(dodge, 1)
-            # reduced model
-            push!(xs, k)
-            push!(ys, 1-accB)
-            push!(dodge, 2)
-        end
-    end
-
-    modelA = load_and_convert(dir, "all", 3:5)
-    modelB = load_and_convert(dir, "dropC", 3:4)
-    modelC = load_and_convert(dir, "dropB", 3:4)
-    modelD = load_and_convert(dir, "dropA", 3:4)
-
+function draw_train_acc_boxplot(data)
     global SETTINGS
-    fig = Figure(resolution=SETTINGS[:resolution], fontsize=SETTINGS[:fontsize])
-    g = fig[1,1] = GridLayout()
-
-    axmain = Axis(g[1:2,1:2],
-        xticks=(1:4, example_labels),
-        ylabel="Classification error",
-        xticksize=0,
-        yticksize=2,
-        xticklabelalign=(:center,:top),
-    )
-    ax = Matrix{Axis}(undef, 2, 2)
-    for i in 1:2, j in 1:2
-        myticks = tick_set[i,j]
-        ax[i,j] = Axis(g[i,j+2]; title=example_titles[i,j], xticks=myticks, yticks=myticks, kwargs...)
+    C, sz = SETTINGS[:resolution_scaling_factor], SETTINGS[:paper_size]
+    fig, grd, axs = with_theme(theme_minimal(), figure_padding=5) do
+        boxplot_summary(
+            data,
+            :accuracy_train, "Training Accuracy", LinearTicks(11), -0.05, 1.05;
+            size = (0.9 * C * sz[1], 0.5 * C * sz[2]),
+        )
     end
+    return fig
+end
 
-    boxplot!(axmain, xs, ys,
-        dodge=dodge,
-        color=map(d -> d==1 ? :gray75 : :gray50, dodge),
-        shownotch=true,
-        width=0.6,
-    )
-    Legend(
-        g[1:2,1:2],
-        [PolyElement(color=:gray75), PolyElement(color=:gray50)],
-        ["Sparse", "Reduced"],
-        framevisible=false,
-        halign=:left,
-        valign=:bottom,
-        rowgap=5,
-    )
-    
-    plot_confusion_matrix!(ax[1,1], mean(modelA))
-    plot_confusion_matrix!(ax[1,2], mean(modelB))
-    plot_confusion_matrix!(ax[2,1], mean(modelC))
-    plot_confusion_matrix!(ax[2,2], mean(modelD))
+function draw_test_acc_boxplot(data)
+    global SETTINGS
+    C, sz = SETTINGS[:resolution_scaling_factor], SETTINGS[:paper_size]
+    fig, grd, axs = with_theme(theme_minimal(), figure_padding=5) do
+        boxplot_summary(
+            data,
+            :accuracy_test, "Test Accuracy", LinearTicks(11), -0.05, 1.05;
+            size = (0.9 * C * sz[1], 0.5 * C * sz[2]),
+        )
+    end
+    return fig
+end
 
-    colgap!(g, 5)
-    rowgap!(g, 5)
+function draw_gap_boxplot(data)
+    global SETTINGS
+    C, sz = SETTINGS[:resolution_scaling_factor], SETTINGS[:paper_size]
+    fig, grd, axs = with_theme(theme_minimal(), figure_padding=5) do
+        boxplot_summary(
+            data,
+            :test_train_gap, L"\text{Train} - \text{Test}", LinearTicks(11), -0.05, 1.05;
+            size = (0.9 * C * sz[1], 0.5 * C * sz[2]),
+        )
+    end
+    return fig
+end
 
+function draw_ppv_boxplot(data)
+    global SETTINGS
+    C, sz = SETTINGS[:resolution_scaling_factor], SETTINGS[:paper_size]
+    fig, grd, axs = with_theme(theme_minimal(), figure_padding=5) do
+        boxplot_summary(
+            data,
+            :ppv, "Ratio of True Positives to Predicted Positives", LinearTicks(7), -0.05, 1.05;
+            size = (0.9 * C * sz[1], 0.5 * C * sz[2]),
+        )
+    end
+    return fig
+end
+
+function draw_tpr_boxplot(data)
+    global SETTINGS
+    C, sz = SETTINGS[:resolution_scaling_factor], SETTINGS[:paper_size]
+    fig, grd, axs = with_theme(theme_minimal(), figure_padding=5) do
+        boxplot_summary(
+            data,
+            :tpr, "True Positive Rate", LinearTicks(7), -0.05, 1.05;
+            size = (0.9 * C * sz[1], 0.5 * C * sz[2]),
+        )
+    end
     return fig
 end
 
 ##### Tables #####
 
-function benchmark_summary(dir, examples; include_gamma=false)
+function timing_table(dir, examples, projs)
     #
-    function summarize_col(df, col, alpha, f)
-        xs = df[!, col]
-        lo = alpha/2
-        hi = 1-lo
-        return map(f, (median(xs), quantile(xs, lo), quantile(xs, hi)))
+    function gather_time_data(df)
+        return combine(groupby(df, :replicate), :time => sum)[!, 2]
     end
-    #
-    function write_ci(x, lo, hi)
-        latexstring("$(x)\\, ($(lo), $(hi))")
+    global ABBREVIATIONS
+    colnames = [""; map(id -> ABBREVIATIONS[id], projs)]
+    df = rename!(DataFrame(Matrix{String}(undef, 0, length(colnames)), :auto), colnames)
+    for example in examples
+        newrow = String[]
+        push!(newrow, example)
+        for proj in projs
+            tbls = load_dfs(dir, example, proj)
+            ts = mapreduce(gather_time_data, +, tbls)
+            push!(newrow, str_summarize_col(ts, 0.1, number_formatter2))
+        end
+        push!(df, newrow)
     end
-    #
-    number_formatter(x) = round(x, sigdigits=2)
-    number_formatter2(x) = round(x, sigdigits=3)
-    integer_formatter(x) = round(Int, x)
+    return df
+end
 
-    title = String[]
-    es = LaTeXString[]
-    ls = LaTeXString[]
-    gs = LaTeXString[]
-    ks = LaTeXString[]
-    trn = LaTeXString[]
-    tst = LaTeXString[]
+function summarize_col(xs, alpha, f)
+    lo = alpha
+    hi = 1-lo
+    l, v, h = map(f, (quantile(xs, lo), median(xs), quantile(xs, hi)))
+    l, h = extrema((l, h))
+    return (lo=l, val=v, hi=h)
+end
 
-    alpha = 0.05
+summarize_col(df, col, alpha, f) = summarize_col(df[!, col], alpha, f)
+
+error_percent_formatter(x) = round(100*(1-x), sigdigits=2)
+number_formatter(x) = round(x, sigdigits=2)
+number_formatter2(x) = round(x, sigdigits=3)
+integer_formatter(x) = round(Int, x)
+
+function str_summarize_col(args...)
+    x = summarize_col(args...)
+    @sprintf("%g, %g, %g", x.lo, x.val, x.hi)
+end
+
+function fetch_metric_label(col)
+    LABELS = Dict(
+        :train => "Train Error (\\%)",
+        :test => "Test Error (\\%)",
+        :epsilon => "\$\\epsilon\$",
+        :hyperparam => "\$k\$ or \$\\lambda\$",
+        :active_variables => "\\# Active",
+        :time => "Time (s)",
+    )
+
+    return LABELS[col]
+end
+
+function fetch_metric_formatter(col)
+    FORMATTER = Dict(
+        :train => error_percent_formatter,
+        :test => error_percent_formatter,
+        :epsilon => number_formatter2,
+        :lambda => number_formatter2,
+        :k => integer_formatter,
+        :active_variables => integer_formatter,
+        :time => number_formatter,
+    )
+    return FORMATTER[col]
+end
+
+function fetch_metric((df1, df2), col, alpha)
+    if col == :time
+        data = combine(groupby(df1, :replicate), :time => sum => :time)
+        data.time .+= df2.time
+    else
+        data = df2
+    end
+    fmt = fetch_metric_formatter(col)
+    str_summarize_col(data, col, alpha, fmt)
+end
+
+function make_comparative_table_by_example(dir, examples; alpha=0.05)
+    global ABBREVIATIONS
+
+    io = IOBuffer()
+
+    write(io, "\\begin{tabular}{ccccccc}\n")
+    write(io, "\\toprule\n")
+    write(io, "    & \\multicolumn{2}{c}{HomL0} & \\multicolumn{2}{c}{HetL0} & \\multicolumn{2}{c}{HetL1} \\\\\n")
+    write(io, "    \\cmidrule(lr){2-3}    \\cmidrule(lr){4-5}    \\cmidrule(lr){6-7}\n")
+    write(io, "    & Error (\\%) & \\# Active & Error (\\%) & \\# Active & Error (\\%) & \\# Active \\\\\n")
+    write(io, "\\midrule\n")
 
     for example in examples
-        _, summary_df, _ = load_dfs(dir, example)
+        _, unused, df1, _ = load_dfs(dir, example, "HomogeneousL0Projection")
+        data1_err = fetch_metric((unused, df1), :test, alpha)
+        data1_act = fetch_metric((unused, df1), :active_variables, alpha)
 
-        # use log10 scale for epsilon and lambda
-        summary_df.epsilon .= log10.(summary_df.epsilon)
-        summary_df.lambda .= log10.(summary_df.lambda)
+        _, unused, df2, _ = load_dfs(dir, example, "HeterogeneousL0Projection")
+        data2_err = fetch_metric((unused, df2), :test, alpha)
+        data2_act = fetch_metric((unused, df2), :active_variables, alpha)
 
-        # use error instead of accuracy
-        summary_df.train .= 1 .- summary_df.train
-        summary_df.test .= 1 .- summary_df.test
+        _, unused, df3, _ = load_dfs(dir, example, "HeterogeneousL1BallProjection")
+        data3_err = fetch_metric((unused, df3), :test, alpha)
+        data3_act = fetch_metric((unused, df3), :active_variables, alpha)
 
-        e, e_lo, e_hi = summarize_col(summary_df, :epsilon, alpha, number_formatter2)
-        l, l_lo, l_hi = summarize_col(summary_df, :lambda, alpha, number_formatter2)
-        k, k_lo, k_hi = summarize_col(summary_df, :active_variables, alpha, integer_formatter)
-        train, train_lo, train_hi = summarize_col(summary_df, :train, alpha, number_formatter)
-        test, test_lo, test_hi = summarize_col(summary_df, :test, alpha, number_formatter)
-
-        push!(title, first(summary_df.title))
-        push!(es, write_ci(e, e_lo, e_hi))
-        push!(ls, write_ci(l, l_lo, l_hi))
-        push!(ks, write_ci(k, k_lo, k_hi))
-        push!(trn, write_ci(train, train_lo, train_hi))
-        push!(tst, write_ci(test, test_lo, test_hi))
-
-        if include_gamma
-            summary_df.gamma .= log10.(summary_df.gamma)
-            g, g_lo, g_hi = summarize_col(summary_df, :gamma, alpha, number_formatter2)
-            push!(gs, write_ci(g, g_lo, g_hi))
-        end
+        write(io, "$(example)
+            & $(data1_err)
+            & $(data1_act)
+            & $(data2_err)
+            & $(data2_act)
+            & $(data3_err)
+            & $(data3_act) \\\\\n")
     end
 
-    if include_gamma
-        # df = DataFrame(title=title, epsilon=es, lambda=ls, gamma=gs, k=ks, train=trn, test=tst)
-        df = DataFrame(title=title, lambda=ls, gamma=gs, k=ks, train=trn, test=tst)
-    else
-        # df = DataFrame(title=title, epsilon=es, lambda=ls, k=ks, train=trn, test=tst)
-        df = DataFrame(title=title, lambda=ls, k=ks, train=trn, test=tst)
+    write(io, "\\bottomrule\n")
+    write(io, "\\end{tabular}")
+    tbl = String(take!(io))
+    close(io)
+    return tbl
+end
+
+function synthetic_table_summary(df)
+    # do not select p or k because they are assumed to be fixed
+    params = [:n, :c, :rho, :SNR]
+    sort!(df, [:n, :c, :SNR, :rho])
+    solvers = unique(df.solver)
+    gdf = groupby(df, [params; :solver])
+
+    M = length(params)
+    N = length(solvers)
+
+    # time
+    tmp = unstack(
+        combine(gdf, :time => (x -> str_summarize_col(x, 0.1, number_formatter2)) => :time),
+        :solver,
+        :time;
+        renamecols = x -> Symbol(:time_, x)
+    )
+
+    # test error
+    tmp2 = unstack(
+        combine(gdf, :accuracy_test => (x -> str_summarize_col(x, 0.1, error_percent_formatter)) => :test),
+        :solver,
+        :test;
+        renamecols = x -> Symbol(:test_, x)
+    )
+    tmp = leftjoin(tmp, tmp2; on=params)
+
+    io = IOBuffer()
+
+    write(io, "\\begin{tabular}{$(repeat('c', M+2*N))}\n")
+    write(io, "\\toprule\n")
+    write(io, "    $(repeat(" & ", M))\\multicolumn{$(N)}{c}{Time (s)} & \\multicolumn{$(N)}{c}{Test (\\%)} \\\\\n")
+    write(io, "    \\cmidrule(lr){$(N+1)-$(N+M)}    \\cmidrule(lr){$(N+M+1)-$(N+2*M)} \n")
+    write(io, "    $(join(params, " & ")) & $(join(solvers, " & ")) & $(join(solvers, " & ")) \\\\\n")
+    write(io, "\\midrule\n")
+
+    for row in eachrow(tmp)
+        write(io, join(row, " & "))
+        write(io, " \\\\\n")
     end
 
-    return df
-end
-
-function uci_benchmarks(dir)
-    examples = ["iris", "lymphography", "zoo", "bcw", "waveform", "splice", "letters", "optdigits", "vowel", "HAR", "TCGA-HiSeq"]
-    df = benchmark_summary(dir, examples)
-    return df
-end
-
-function cancer_benchmarks(dir)
-    examples = ["colon", "srbctA", "leukemiaA", "lymphomaA", "brain", "prostate"]
-    df = benchmark_summary(dir, examples)
-    return df
-end
-
-function nonlinear_benchmarks(dir)
-    examples = ["circles", "clouds", "waveform", "spiral", "spiral-hard", "vowel"]
-    df = benchmark_summary(dir, examples, include_gamma=false)
-    return df
+    write(io, "\\bottomrule\n")
+    write(io, "\\end{tabular}")
+    tbl = String(take!(io))
+    close(io)
+    return tbl
 end
 
 ##### Execution of the script #####
 
 function main(input, output)
+    synth_path = joinpath(input, "synthetic")
     uci_path = joinpath(input, "linear")
     cancer_path = joinpath(input, "cancer")
     nonlinear_path = joinpath(input, "nonlinear")
-    ms_path = joinpath(input, "MS")
 
     figures = joinpath(output, "figures")
     tables = joinpath(output, "tables")
@@ -514,50 +713,136 @@ function main(input, output)
         end
     end
 
-    header = [
-        "",
-        # L"\multicolumn{1}{c}{$\log_{10}(\epsilon)$}",
-        L"\multicolumn{1}{c}{$\log_{10}(\lambda)$}",
-        L"\multicolumn{1}{c}{$k$}",
-        "\\multicolumn{1}{c}{Train}",
-        "\\multicolumn{1}{c}{Test}",
-    ]
-    # header_gamma = [
-    #     header[1:3];
-    #     [L"\multicolumn{1}{c}{$\log_{10}(\gamma)$}"];
-    #     header[4:end]    
-    # ]
+    # Section 4.1
+    @info "Generating Table 2..."
+    @time begin
+        synth1 = load_synth1_data(synth_path)
+        tbl2 = synthetic_table_summary(synth1)
+        save_table(joinpath(tables, "Table2.tex"), tbl2, nothing)
+    end
 
-    # Sec 3.1
-    fig2 = synthetic_summary(uci_path)
-    save(joinpath(figures, "Figure2.pdf"), fig2, pt_per_unit=1)
+    @info "Generating Table 3..."
+    @time begin
+        synth2 = load_synth2_data(synth_path)
+        tbl3 = synthetic_table_summary(synth2)
+        save_table(joinpath(tables, "Table3.tex"), tbl3, nothing)
+    end
 
-    fig3 = synthetic_coefficients(uci_path)
-    save(joinpath(figures, "Figure3.pdf"), fig3, pt_per_unit=1)
+    @info "Generating Figure 2..."
+    @time begin
+        fig2 = draw_tpr_boxplot(synth1)
+        save(joinpath(figures, "Figure2.pdf"), fig2, pt_per_unit=1)
+    end
 
-    fig4 = TCGA_topgenes()
-    save(joinpath(figures, "Figure4.pdf"), fig4, pt_per_unit=1)
+    @info "Generating Figure 3..."
+    @time begin
+        fig3 = draw_ppv_boxplot(synth1)
+        save(joinpath(figures, "Figure3.pdf"), fig3, pt_per_unit=1)
+    end
 
-    # Sec 3.2
-    df1 = uci_benchmarks(uci_path)
-    save_table(joinpath(tables, "Table1.tex"), df1, header)
+    @info "Generating Figure 4..."
+    @time begin
+        fig4 = draw_tpr_boxplot(synth2)
+        save(joinpath(figures, "Figure4.pdf"), fig4, pt_per_unit=1)
+    end
 
-    # Sec 3.3
-    df2 = nonlinear_benchmarks(nonlinear_path)
-    save_table(joinpath(tables, "Table2.tex"), df2, header)
+    @info "Generating Figure 5..."
+    @time begin
+        fig5 = draw_ppv_boxplot(synth2)
+        save(joinpath(figures, "Figure5.pdf"), fig5, pt_per_unit=1)
+    end
 
-    # Sec 3.4
-    df3 = cancer_benchmarks(cancer_path)
-    save_table(joinpath(tables, "Table3.tex"), df3, header)
+    # Section 4.2
+    @info "Generating Table 4..."
+    @time begin
+        tbl4 = make_comparative_table_by_example(cancer_path,
+            (
+                "colon", "srbctA", "leukemiaA", "lymphomaA", "brain",
+                "prostate",
+            );
+            alpha=0.1
+        )
+        save_table(joinpath(tables, "Table4.tex"), tbl4, nothing)
+    end
     
-    fig5 = cancer_size_distributions(cancer_path)
-    save(joinpath(figures, "Figure5.pdf"), fig5, pt_per_unit=1)
+    @info "Generating Figure 6..."
+    @time begin
+        fig6 = with_theme(theme_minimal(), figure_padding=5) do
+            cancer_size_distributions(cancer_path, "HeterogeneousL0Projection")
+        end
+        save(joinpath(figures, "Figure6.pdf"), fig6, pt_per_unit=1)
+    end
 
-    # Sec 3.5
-    fig6 = MS_error_rates(ms_path)
-    save(joinpath(figures, "Figure6.pdf"), fig6, pt_per_unit=1)
+    # Section 4.3
+    @info "Generating Table 5..."
+    @time begin
+        tbl5 = make_comparative_table_by_example(uci_path,
+            (
+                "iris", "lymphography", "zoo", "bcw","waveform",
+                "splice", "letters", "optdigits", "vowel", "HAR",
+                "TCGA-HiSeq",
+            );
+            alpha=0.1
+        )
+        save_table(joinpath(tables, "Table5.tex"), tbl5, nothing)
+    end
 
-    return
+    @info "Generating Figure 7..."
+    @time begin
+        fig7 = with_theme(theme_minimal(), figure_padding=5) do
+            TCGA_topgenes(uci_path, "HeterogeneousL0Projection")
+        end
+        save(joinpath(figures, "Figure7.pdf"), fig7, pt_per_unit=1)
+    end
+
+    # Section 3.4
+    @info "Generating Table 6..."
+    @time begin
+        tbl6 = make_comparative_table_by_example(nonlinear_path,
+            (
+                "circles", "clouds", "waveform", "spiral", "spiral-hard",
+                "vowel",
+            );
+            alpha=0.1
+        )
+        save_table(joinpath(tables, "Table6.tex"), tbl6, nothing)
+    end
+
+    # Appendix: Timing
+    @info "Generating Appendix Table C1"
+    @time begin
+        tblC1 = timing_table(cancer_path,
+            [
+                "colon", "srbctA", "leukemiaA", "lymphomaA", "brain",
+                "prostate",
+            ],
+            [
+                "HomogeneousL0Projection",
+                "HeterogeneousL0Projection",
+                "HeterogeneousL1BallProjection",
+            ]
+        )
+        save_table(joinpath(tables, "TableC1.tex"), tblC1, nothing)
+    end
+
+    @info "Generating Appendix Table C2"
+    @time begin
+        tblC2 = timing_table(uci_path,
+            [
+                "iris", "lymphography", "zoo", "bcw","waveform",
+                "splice", "letters", "optdigits", "vowel", "HAR",
+                "TCGA-HiSeq",
+            ],
+            [
+                "HomogeneousL0Projection",
+                "HeterogeneousL0Projection",
+                "HeterogeneousL1BallProjection",
+            ]
+        )
+        save_table(joinpath(tables, "TableC2.tex"), tblC2, nothing)
+    end
+
+    return nothing
 end
 
 # Run the script.

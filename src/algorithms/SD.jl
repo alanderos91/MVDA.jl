@@ -13,7 +13,7 @@ function __mm_init__(::SD, (projection_type, rng), problem::MVDAProblem, ::Nothi
     nparams = ifelse(problem.kernel isa Nothing, p, n)
 
     # projection
-    projection = make_projection(projection_type, rng, nparams, c)
+    projection = make_projection(projection_type, rng, nparams, nd)
 
     # constants
     Abar = vec(mean(A, dims=1))
@@ -28,11 +28,8 @@ end
 # Assume extras has the correct data structures.
 __mm_init__(::SD, (projection_type, rng), problem::MVDAProblem, extras) = extras
 
-# Update data structures due to changing ρ.
-__mm_update_rho__(::SD, problem::MVDAProblem, extras, lambda, rho) = nothing
-
-# Update data structures due to changing λ. 
-__mm_update_lambda__(::SD, problem::MVDAProblem, extras, lambda, rho) = nothing
+# Update data structures due to changing hyperparameters
+__mm_update_datastructures__(::SD, f::AbstractVDAModel, problem, extras, hparams) = nothing
 
 function __steepest_descent__(problem::MVDAProblem, extras, alpha, beta)
     @unpack coeff, grad, res, intercept = problem
@@ -67,29 +64,64 @@ function __steepest_descent__(problem::MVDAProblem, extras, alpha, beta)
     return t
 end
 
-# Apply one update in distance penalized problem.
-function __mm_iterate__(::SD, problem::MVDAProblem, extras, hyperparams)
-    @unpack epsilon, lambda, rho, k = hyperparams
-    n, p, _ = probsizes(problem)
-    T = floattype(problem)
-    alpha, beta = T(1/n), T(lambda/p+rho/p)
-    apply_projection(extras.projection, problem, k)
-    evaluate_residuals!(problem, extras, epsilon, true, true)
-    evaluate_gradient!(problem, lambda, rho)
+function __mm_iterate__(::SD, f::PenalizedObjective{SqEpsilonLoss,PENALTY},
+    problem::MVDAProblem, extras, hparams) where PENALTY <: Union{RidgePenalty,SqDistPenalty}
+    #
+    n, _, _ = probsizes(problem)
+    T = floattype(problem)    
+    scale_factor = get_scale_factor(f, problem, extras, hparams)
+
+    if PENALTY <: RidgePenalty
+        scaled_lambda = hparams.lambda*scale_factor
+        alpha, beta = T(1/n), T(scaled_lambda)
+    else
+        scaled_rho = hparams.rho*scale_factor
+        alpha, beta = T(1/n), T(scaled_rho)
+    end
+
+    evaluate_model!(f, problem, extras, hparams)
     __steepest_descent__(problem, extras, alpha, beta)
 
     return nothing
 end
 
-# Apply one update in regularized problem.
-function __mm_iterate_reg__(::SD, problem::MVDAProblem, extras, hyperparams)
-    @unpack epsilon, lambda = hyperparams
-    n, p, _ = probsizes(problem)
-    T = floattype(problem)
-    alpha, beta = T(1/n), T(lambda/p)
-    evaluate_residuals!(problem, extras, epsilon, true, false)
-    evaluate_gradient!(problem, lambda)
-    __steepest_descent__(problem, extras, alpha, beta)
+function __mm_iterate__(::SD, f::UnpenalizedObjective,
+    problem::MVDAProblem, extras, hparams)
+    #
+    n, _, _ = probsizes(problem)
+    T = floattype(problem)    
+
+    evaluate_model!(f, problem, extras, hparams)
+    __steepest_descent__(problem, extras, T(1/n), zero(T))
 
     return nothing
 end
+
+# function __mm_iterate__(::SD, f::PenalizedObjective{SqEpsilonLoss,LassoPenalty},
+#     problem::MVDAProblem, extras, hparams)
+#     #
+#     B = problem.coeff
+#     G = deepcopy(problem.grad)
+#     T = floattype(problem)
+
+#     old_state = evaluate_model!(f, problem, extras, hparams)
+#     t, steps = T(1.0), 0
+#     not_decreased = true
+#     while not_decreased && steps < 64
+#         axpy!(-t, G.slope, B.slope)
+#         axpy!(-t, G.intercept, B.intercept)
+
+#         new_state = evaluate_model!(f, problem, extras, hparams)
+#         not_decreased = new_state.objective >= old_state.objective
+
+#         if not_decreased
+#             axpy!(t, G.slope, B.slope)
+#             axpy!(t, G.intercept, B.intercept)
+#             t = t / 1.2
+#         end
+#         steps += 1
+#     end
+#     @assert !not_decreased
+    
+#     return nothing
+# end

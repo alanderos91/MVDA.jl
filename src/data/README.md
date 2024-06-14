@@ -117,46 +117,6 @@ The original sequences of 60 nucleotides are expanded to 240 variables using the
 version allows us to determine whether a site is important; e.g. does [0,0,0] mean T or not
 important in the 3 bit version? 
 
-## Dataset: synthetic
-
-**2 classes / 1000 instances / 500 variables**
-
-A simulated multivariate normal.
-
-Classes are determined by the first two variables using the signs of `X*b`
-using `b[1] = 10`, `b[2] = -10`, and `b[j] = 0` otherwise.
-
-Covariance structure is as follows
-
-```julia
-Σ[1,1] = 1
-Σ[2,2] = 1
-Σ[i,i] = 1e-2 for i=3, 4, …, 500
-Σ[1,2] = 0.4
-Σ[i,j] = 1e-4
-```
-
-## Dataset: synthetic-hard
-
-**2 classes / 1000 instances / 500 variables**
-
-A simulated multivariate normal.
-
-Classes are determined by the first two variables using the signs of `X*b`
-using `b[1] = 10`, `b[2] = -10`, and `b[j] = 0` otherwise.
-
-Covariance structure is as follows
-
-```julia
-Σ[1,1] = 1
-Σ[2,2] = 1
-Σ[i,i] = 1e-2 for i=3, 4, …, 500
-Σ[1,2] = 0.4
-Σ[i,j] = 1e-4
-```
-
-Bayes error is expected to be ≈0.1 due to random class inversions.
-
 ## Dataset: vowel
 
 **11 classes / 990 instances / 10 variables**

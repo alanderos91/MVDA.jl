@@ -1,3 +1,10 @@
+function __compute_svd__(A::AbstractMatrix{T}) where T <: Real
+    F = svd(A, full=false)
+    rtol = minimum(size(A)) * eps(T)
+    r = count(>(rtol*F.S[1]), F.S)
+    return SVD(F.U[:, 1:r], F.S[1:r], F.Vt[1:r, :])
+end
+
 # Y = B'x - b0
 function predicted_response!(Y, X, B, b0, intercept)
     T = eltype(Y)
@@ -17,24 +24,9 @@ end
 # R enters as Yhat
 #
 function shifted_response!(Z, Y, R, epsilon)
-    num_julia_threads = Threads.nthreads()
-
-    if num_julia_threads == 1
-        for i in axes(Y, 1)
-            z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
-            shifted_response!(z, y, r, epsilon)
-        end
-    else
-        num_BLAS_threads = BLAS.get_num_threads()
-        try
-            BLAS.set_num_threads(1)
-            @batch per=core for i in axes(Y, 1)
-                z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
-                shifted_response!(z, y, r, epsilon)
-            end
-        finally
-            BLAS.set_num_threads(num_BLAS_threads)
-        end
+    for i in axes(Y, 1)
+        z, y, r = view(Z, i, :), view(Y, i, :), view(R, i, :)
+        shifted_response!(z, y, r, epsilon)
     end
 
     return nothing
@@ -90,47 +82,6 @@ function evaluate_residuals!(problem::MVDAProblem, extras, epsilon, need_loss::B
     return nothing
 end
 
-# sparse model
-function evaluate_gradient!(problem::MVDAProblem, lambda, rho)
-    @unpack coeff, res, grad, intercept = problem
-    n, p, _ = probsizes(problem)
-    A = design_matrix(problem)
-    B = coeff.slope
-    T = floattype(problem)
-
-    alpha, beta, gamma = convert(T, 1/n), convert(T, lambda/p), convert(T, rho/p)
-
-    if intercept
-        mean!(grad.intercept, res.loss')
-        grad.intercept .*= -one(T)
-    end
-    copyto!(grad.slope, res.dist)
-    BLAS.gemm!('T', 'N', -alpha, A, res.loss, -gamma, grad.slope)
-    BLAS.axpy!(beta, B, grad.slope)
-
-    return nothing
-end
-
-# regularized model
-function evaluate_gradient!(problem::MVDAProblem, lambda)
-    @unpack coeff, res, grad, intercept = problem
-    n, p, _ = probsizes(problem)
-    A = design_matrix(problem)
-    B = coeff.slope
-    T = floattype(problem)
-
-    alpha, beta = convert(T, 1/n), convert(T, lambda/p)
-
-    if intercept
-        mean!(grad.intercept, res.loss')
-        grad.intercept .*= -one(T)
-    end
-    copyto!(grad.slope, B)
-    BLAS.gemm!('T', 'N', -alpha, A, res.loss, beta, grad.slope)
-
-    return nothing
-end
-
 function __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
     return (;
         risk=risk,
@@ -142,49 +93,16 @@ function __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
     )
 end
 
-"""
-Evaluate the penalized least squares criterion. Also updates the gradient.
-This assumes that projections have been handled externally.
-"""
-function evaluate_objective!(problem::MVDAProblem, extras, hyperparams)
-    @unpack epsilon, lambda, rho = hyperparams
-    @unpack coeff, res, grad = problem
-    n, p, _ = probsizes(problem)
-
-    evaluate_residuals!(problem, extras, epsilon, true, true)
-    evaluate_gradient!(problem, lambda, rho)
-
-    B, R, Q, G = coeff.slope, res.loss, res.dist, grad
-    risk = 1//n * dot(R, R)
-    penalty = dot(B, B)
-    loss = 1//2 * (risk + lambda/p*penalty)
-    distsq = dot(Q, Q)
-    obj = loss + 1//2*rho/p*distsq
-    gradsq = dot(G, G)
-
-    return __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
-end
-
-"""
-Evaluate the objective in the regularized, unconstrained version of the problem.
-"""
-function evaluate_objective_reg!(problem::MVDAProblem, extras, hyperparams)
-    @unpack epsilon, lambda = hyperparams
-    @unpack coeff, res, grad = problem
-    n, p, _ = probsizes(problem)
-
-    evaluate_residuals!(problem, extras, epsilon, true, false)
-    evaluate_gradient!(problem, lambda)
-
-    B, R, G = coeff.slope, res.loss, grad
-    risk = 1//n * dot(R, R)
-    penalty = dot(B, B)
-    loss = 1//2 * (risk + lambda/p*penalty)
-    distsq = zero(floattype(problem))
-    obj = loss
-    gradsq = dot(G, G)
-
-    return __eval_result__(risk, loss, obj, penalty, distsq, gradsq)
+function evaluate_gradient_mapping!(problem::MVDAProblem, t)
+    #
+    @unpack coeff, coeff_prev, grad = problem
+    grad.slope .= coeff_prev.slope - coeff.slope
+    v = norm(grad.slope, Inf)
+    if problem.intercept
+        grad.intercept .= coeff_prev.intercept - coeff.intercept
+        v = max(v, norm(grad.intercept, Inf))
+    end
+    return 1/t * v
 end
 
 """
@@ -220,17 +138,6 @@ sparsity_to_k(problem::MVDAProblem, s) = sparsity_to_k(problem.kernel, problem, 
 sparsity_to_k(::Nothing, problem::MVDAProblem, s) = round(Int, (1-s) * problem.p)
 sparsity_to_k(::Kernel, problem::MVDAProblem, s) = round(Int, (1-s) * problem.n)
 
-"""
-Apply a projection to model coefficients.
-"""
-function apply_projection(projection, problem, k)
-    @unpack coeff, coeff_proj = problem
-    copyto!(coeff_proj.slope, coeff.slope)
-    copyto!(coeff_proj.intercept, coeff.intercept)
-    projection(coeff_proj.slope, k)
-    return coeff_proj
-end
-
 struct GeometricProression <: Function
     multiplier::Float64
 end
@@ -264,9 +171,8 @@ function make_sparsity_grid(n, len)
         end
     end
     ys = unique!(round.(Int, (1 .- xs) .* n))
-    filter!(<=(n), ys)
-    xs = sort!(1 .- ys ./ n)
-    return xs
+    filter!(x -> 0 < x <= n, ys)
+    return sort!(ys, rev=true)
 end
 
 function make_regular_log10_grid(a, b, m)

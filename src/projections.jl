@@ -1,9 +1,13 @@
+#
+#   L0-type projections
+#
+
 """
 Project `x` onto sparsity set with `k` non-zero elements.
 Assumes `idx` enters as a vector of indices into `x`.
 """
 function project_l0_ball!(x::AbstractVector, k::Integer,
-    rng::AbstractRNG=Random.GLOBAL_RNG,
+    rng::AbstractRNG=Random.default_rng(),
     idx::T=collect(eachindex(x)),
     buffer::T=similar(idx)) where T <: AbstractVector{<:Integer}
     #
@@ -77,7 +81,6 @@ function __threshold__!(x, abs_pivot)
     end
     return nonzero_count
 end
-
 
 __iterateby__(::ObsDim.Constant{1}) = eachrow
 __iterateby__(::ObsDim.Constant{2}) = eachcol
@@ -165,9 +168,355 @@ function (P::HeterogeneousL0Projection)(X::AbstractMatrix, k)
 end
 
 #
+#   L1-type projections
+#
+
+function project_l1_ball!(x, r, xtmp, find_split::F=condat_algorithm1!) where F
+    #
+    #   project x to the non-negative orthant
+    #
+    @. xtmp = abs(x)
+    if sum(xtmp) <= r
+        return x
+    end
+ 
+    #
+    #   compute the splitting element τ needed in KKT conditions
+    #
+    tau = find_split(xtmp, r)
+
+    #
+    #   complete the projection:
+    #   y = P_simplex(|x|)
+    #   z = P_r(x) by sgn(x_i) * y_i
+    #
+    for i in eachindex(x)
+        x[i] = sign(x[i]) * max(0, abs(x[i]) - tau)
+    end
+
+    return x
+end
+
+function project_l1_ball!(X::AbstractMatrix, args...;
+    obsdim::T=ObsDim.Constant{1}()) where T
+    #
+    iterateby = __iterateby__(convert(ObsDimension, obsdim))
+    project_l1_ball!(iterateby, X, args...)
+end
+
+function project_l1_ball!(itr::F, X::AbstractMatrix, r, tmp, args...) where F
+    for x in itr(X)
+        project_l1_ball!(x, r, tmp)
+    end
+    return X
+end
+
+"""
+Find the splitting element `τ` which determines the projection of `x-r` to the unit simplex.
+
+This is version is based on quicksort, as described in
+
+Laurent Condat.  Fast Projection onto the Simplex and the l1 Ball.
+Mathematical Programming, Series A, Springer, 2016, 158 (1), pp.575-585.10.1007/s10107-015-0946-6. hal-01056171v2
+"""
+function condat_algorithm1!(x, a)
+    # sort elements in descending order using quicksort
+    sort!(x, rev=true)
+
+    n = length(x)
+    j = 1           # cardinality of the index set, I
+    tau = x[j] - a  # initialize the splitting element, τ
+
+    # add the largest elements until τ satisfies the splitting condition:
+    #   x[i] - τ <= 0, for i not in the index set I, and
+    #   x[i] - τ > 0,  for i in the index set I
+    while j < n && (x[j] <= tau || x[j+1] > tau)
+        # update τ and the cardinality of I
+        tau = (j*tau + x[j+1]) / (j+1)
+        j += 1
+    end
+
+    return tau
+end
+
+struct L1BallProjection
+    tmp::Vector{Float64}
+
+    function L1BallProjection(n::Int)
+        new(zeros(n))
+    end
+end
+
+(P::L1BallProjection)(x::AbstractVector, r) = project_l1_ball!(x, r, P.tmp)
+(P::L1BallProjection)(x::AbstractMatrix, r) = project_l1_ball!(vec(x), r, P.tmp)
+
+#
+#   HomogeneousL2BallProjection
+#
+#   Shrunken features are homogeneous in the sense that their coordinates have L1 norm <= r (rows).
+#
+struct HomogeneousL1BallProjection
+    tmp::Vector{Float64}
+
+    function HomogeneousL1BallProjection(n::Int)
+        new(zeros(n))
+    end
+end
+
+(P::HomogeneousL1BallProjection)(X::AbstractMatrix, r) = project_l1_ball!(X, r, P.tmp; obsdim=ObsDim.Constant{1}())
+
+#
+#   HeterogeneousL1BallProjection
+#
+#   Shrunken features are hetergeneous in the sense that their coordinates may have different norms.
+#   Instead, we shrink all features along a given axis in the encoding space to have L1 norm <= r (columns).
+#
+struct HeterogeneousL1BallProjection
+    tmp::Vector{Float64}
+
+    function HeterogeneousL1BallProjection(n::Int)
+        new(zeros(n))
+    end
+end
+
+(P::HeterogeneousL1BallProjection)(X::AbstractMatrix, r) = project_l1_ball!(X, r, P.tmp; obsdim=ObsDim.Constant{2}())
+
+#
+#   L2-type projections
+#
+
+function project_l2_ball!(x::AbstractVector, r)
+    v = norm(x)
+    if v > r
+        @. x = x / v * r
+    end
+    return x
+end
+
+function project_l2_ball!(X::AbstractMatrix, args...;
+    obsdim::T=ObsDim.Constant{1}()) where T
+    #
+    iterateby = __iterateby__(convert(ObsDimension, obsdim))
+    project_l2_ball!(iterateby, X, args...)
+end
+
+function project_l2_ball!(itr::F, X::AbstractMatrix, r) where F
+    for x in itr(X)
+        project_l2_ball!(x, r)
+    end
+    return X
+end
+
+#
+#   L2BallProjection
+#
+struct L2BallProjection end
+
+(P::L2BallProjection)(x::AbstractVector, r) = project_l2_ball!(x, r)
+(P::L2BallProjection)(x::AbstractMatrix, r) = project_l2_ball!(vec(x), r)
+
+#
+#   HomogeneousL2BallProjection
+#
+#   Shrunken features are homogeneous in the sense that their coordinates have norm <= r (rows).
+#
+struct HomogeneousL2BallProjection end
+
+(P::HomogeneousL2BallProjection)(X::AbstractMatrix, r) = project_l2_ball!(X, r; obsdim=ObsDim.Constant{1}())
+
+#
+#   HeterogeneousL2BallProjection
+#
+#   Shrunken features are hetergeneous in the sense that their coordinates may have different norms.
+#   Instead, we shrink all features along a given axis in the encoding space to have norm <= r (columns).
+#
+struct HeterogeneousL2BallProjection end
+
+(P::HeterogeneousL2BallProjection)(X::AbstractMatrix, r) = project_l2_ball!(X, r; obsdim=ObsDim.Constant{2}())
+
+# #
+# #   Elastic Net projections
+# #
+
+# function project_elastic_net!(x::AbstractVector, r)
+#     v = norm(x)
+#     if v > r
+#         @. x = x / v * r
+#     end
+#     return x
+# end
+
+# function project_elastic_net!(X::AbstractMatrix, args...;
+#     obsdim::T=ObsDim.Constant{1}()) where T
+#     #
+#     iterateby = __iterateby__(convert(ObsDimension, obsdim))
+#     project_elastic_net!(iterateby, X, args...)
+# end
+
+# function project_elastic_net!(itr::F, X::AbstractMatrix, r) where F
+#     for x in itr(X)
+#         project_elastic_net!(x, r)
+#     end
+#     return X
+# end
+
+# #
+# #   ElasticNetProjection
+# #
+# struct ElasticNetProjection end
+
+# (P::ElasticNetProjection)(x::AbstractVector, r) = project_elastic_net!(x, r)
+# (P::ElasticNetProjection)(x::AbstractMatrix, r) = project_elastic_net!(vec(x), r)
+
+# #
+# #   HomogeneousElasticNetProjection
+# #
+# #   Shrunken features are homogeneous in the sense that their coordinates have norm <= r (rows).
+# #
+# struct HomogeneousElasticNetProjection end
+
+# (P::HomogeneousL2BallProjection)(X::AbstractMatrix, r) = project_elastic_net!(X, r; obsdim=ObsDim.Constant{1}())
+
+# #
+# #   HeterogeneousElasticNetProjection
+# #
+# #   Shrunken features are hetergeneous in the sense that their coordinates may have different norms.
+# #   Instead, we shrink all features along a given axis in the encoding space to have norm <= r (columns).
+# #
+# struct HeterogeneousElasticNetProjection end
+
+# (P::HeterogeneousElasticNetProjection)(X::AbstractMatrix, r) = project_elastic_net!(X, r; obsdim=ObsDim.Constant{2}())
+
+#
 #   make_projection()
 #
 make_projection(::Type{Nothing}, rng, p, c) = nothing
-make_projection(::Type{L0Projection}, rng, p, c) = L0Projection(rng, p)
+
+make_projection(::Type{L0Projection}, rng, p, c) = L0Projection(rng, p*c)
 make_projection(::Type{HomogeneousL0Projection}, rng, p, c) = HomogeneousL0Projection(rng, p)
 make_projection(::Type{HeterogeneousL0Projection}, rng, p, c) = HeterogeneousL0Projection(rng, c, p)
+
+make_projection(::Type{L1BallProjection}, rng, p, c) = L1BallProjection(p*c)
+make_projection(::Type{HomogeneousL1BallProjection}, rng, p, c) = HomogeneousL1BallProjection(c)
+make_projection(::Type{HeterogeneousL1BallProjection}, rng, p, c) = HeterogeneousL1BallProjection(p)
+
+make_projection(::Type{L2BallProjection}, rng, p, c) = L2BallProjection()
+make_projection(::Type{HomogeneousL2BallProjection}, rng, p, c) = HomogeneousL2BallProjection()
+make_projection(::Type{HeterogeneousL2BallProjection}, rng, p, c) = HeterogeneousL2BallProjection()
+
+#
+#   apply_projection()
+#
+"""
+Apply a projection to model coefficients.
+"""
+function apply_projection(problem, extras, hparams, inplace)
+    @unpack coeff, coeff_proj = problem
+    if inplace
+        apply_projection(extras.projection, coeff.slope, hparams)
+    else
+        copyto!(coeff_proj.slope, coeff.slope)
+        copyto!(coeff_proj.intercept, coeff.intercept)
+        apply_projection(extras.projection, coeff_proj.slope, hparams)
+    end
+end
+
+apply_projection(::Nothing, x, hparams) = x
+
+function apply_projection(P::L0Projection, x, hparams)
+    @unpack k = hparams
+    P(x, k)
+end
+
+function apply_projection(P::HomogeneousL0Projection, x, hparams)
+    @unpack k = hparams
+    P(x, k)
+end
+
+function apply_projection(P::HeterogeneousL0Projection, x, hparams)
+    @unpack k = hparams
+    P(x, k)
+end
+
+function apply_projection(P::L1BallProjection, x, hparams)
+    @unpack lambda = hparams
+    P(x, lambda)
+end
+
+function apply_projection(P::HomogeneousL1BallProjection, x, hparams)
+    @unpack lambda = hparams
+    P(x, lambda)
+end
+
+function apply_projection(P::HeterogeneousL1BallProjection, x, hparams)
+    @unpack lambda = hparams
+    P(x, lambda)
+end
+
+function apply_projection(P::L2BallProjection, x, hparams)
+    @unpack lambda = hparams
+    P(x, lambda)
+end
+
+function apply_projection(P::HomogeneousL2BallProjection, x, hparams)
+    @unpack lambda = hparams
+    P(x, lambda)
+end
+
+function apply_projection(P::HeterogeneousL2BallProjection, x, hparams)
+    @unpack lambda = hparams
+    P(x, lambda)
+end
+
+#
+# get_scale_factor()
+#
+function get_scale_factor(::L0Projection, x, hparams)
+    @unpack k = hparams
+    scale_factor = 1 / max(1, (prod(size(x)) - k))
+    return scale_factor
+end
+
+function get_scale_factor(::HomogeneousL0Projection, x, hparams)
+    @unpack k = hparams
+    m, n = size(x)
+    scale_factor = 1 / max(1, n*(m-k))
+    return scale_factor
+end
+
+function get_scale_factor(::HeterogeneousL0Projection, x, hparams)
+    @unpack k = hparams
+    m, n = size(x)
+    scale_factor = 1 / max(1, n*(m-k))
+    return scale_factor
+end
+
+function get_scale_factor(::L1BallProjection, x, hparams)
+    scale_factor = 1 / max(1, prod(size(x)))
+    return scale_factor
+end
+
+function get_scale_factor(::HomogeneousL1BallProjection, x, hparams)
+    scale_factor = 1 / max(1, prod(size(x)))
+    return scale_factor
+end
+
+function get_scale_factor(::HeterogeneousL1BallProjection, x, hparams)
+    scale_factor = 1 / max(1, prod(size(x)))
+    return scale_factor
+end
+
+function get_scale_factor(::L2BallProjection, x, hparams)
+    scale_factor = 1 / max(1, prod(size(x)))
+    return scale_factor
+end
+
+function get_scale_factor(::HomogeneousL2BallProjection, x, hparams)
+    scale_factor = 1 / max(1, prod(size(x)))
+    return scale_factor
+end
+
+function get_scale_factor(::HeterogeneousL2BallProjection, x, hparams)
+    scale_factor = 1 / max(1, prod(size(x)))
+    return scale_factor
+end

@@ -12,7 +12,7 @@ function read_last(file)
 end
 
 get_dataset(problem::MVDAProblem) = (original_labels(problem), problem.X)
-split_dataset(problem::MVDAProblem, at) = splitobs(get_dataset(problem), at=at, obsdim=1)
+split_dataset(problem::MVDAProblem, at) = splitobs(get_dataset(problem), at=at, obsdim=ObsDim.First())
 
 number_of_param_vals(grid::AbstractVector) = length(grid) 
 number_of_param_vals(grid::NTuple{N,<:Real}) where N = length(grid)
@@ -66,13 +66,51 @@ get_index_set(::Kernel, (idx_sample, idx_feature)) = idx_sample
 function add_structural_zeros!(sparse, reduced, idxs)
     idx = get_index_set(sparse.kernel, idxs)
 
+    fill!(sparse.coeff.slope, 0)
     sparse.coeff.slope[idx, :] .= reduced.coeff.slope
     sparse.coeff.intercept .= reduced.coeff.intercept
 
+    fill!(sparse.coeff_proj.slope, 0)
     sparse.coeff_proj.slope[idx, :] .= reduced.coeff.slope
     sparse.coeff_proj.intercept .= reduced.coeff.intercept
 
     return nothing
+end
+
+rescale_coefficients!(::NoTransformation, ::Any) = nothing
+
+function rescale_coefficients!(F::ZScoreTransform, prob)
+    if prob.kernel isa Nothing
+        prob.coeff.slope ./= F.scale
+        prob.coeff_proj.slope ./= F.scale
+
+        if prob.intercept
+            prob.coeff.intercept .-= prob.coeff.slope' * F.mean
+            prob.coeff_proj.intercept .-= prob.coeff.slope' * F.mean
+        end
+    end
+    return nothing
+end
+
+get_penalty_hyperparameter_name(::PenalizedObjective{L,RidgePenalty}, ::Any) where L = :lambda
+
+get_penalty_hyperparameter_name(::PenalizedObjective{L,LassoPenalty}, ::Any) where L = :lambda
+
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{L0Projection}) where L = :k
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{HomogeneousL0Projection}) where L = :k
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{HeterogeneousL0Projection}) where L = :k
+
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{L1BallProjection}) where L = :lambda
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{HomogeneousL1BallProjection}) where L = :lambda
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{HeterogeneousL1BallProjection}) where L = :lambda
+
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{L2BallProjection}) where L = :lambda
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{HomogeneousL2BallProjection}) where L = :lambda
+get_penalty_hyperparameter_name(::PenalizedObjective{L,SqDistPenalty}, ::Type{HeterogeneousL2BallProjection}) where L = :lambda
+
+# dispatch for penalty-free methods like PGD
+function get_penalty_hyperparameter_name(::UnpenalizedObjective{L}, ::Type{P}) where {L,P}
+    get_penalty_hyperparameter_name(PenalizedObjective{L,SqDistPenalty}(), P)
 end
 
 """
@@ -92,35 +130,44 @@ Split data in `problem` into cross-validation and a test sets, then run CV over 
   Additional arguments are propagated to `solve_constrained!` and `solve_unconstrained!`. See also [`MVDA.solve_constrained!`](@ref) and [`MVDA.solve_unconstrained!`](@ref).
 """
 function cv_path(
+    f::AbstractVDAModel,
     algorithm::AbstractMMAlg,
     problem::MVDAProblem,
-    epsilon::Real,
-    lambda::Real,
-    s_grid::G,
+    hparams,
+    grids::G,
     data::D=get_dataset(problem);
     projection_type::Type=HomogeneousL0Projection,
     nfolds::Int=5,
     scoref::S=DEFAULT_SCORE_FUNCTION,
     show_progress::Bool=true,
-    progress_bar::Progress=Progress(nfolds * length(s_grid); desc="Running CV w/ $(algorithm)... ", enabled=show_progress),
+    progress_bar::Progress=Progress(nfolds; desc="Running CV w/ $(algorithm)... ", enabled=show_progress),
     data_transform::Type{T}=ZScoreTransform,
     rho_init=DEFAULT_RHO_INIT,
-    rng::AbstractRNG=Random.GLOBAL_RNG,
+    rng::AbstractRNG=Random.default_rng(),
     kwargs...,
     ) where {D,G,S,T}
-    # Sanity checks.
-    if any(x -> x < 0 || x > 1, s_grid)
-        error("Values in sparsity grid should be in [0,1].")
+    # Check model; this is ugly
+    if f isa UnpenalizedObjective && !(algorithm isa PGD)
+        projection_type = Nothing
     end
 
     # Initialize the output.
-    ns = length(s_grid)
+    hparam_name = get_penalty_hyperparameter_name(f, projection_type)
+    hparam_grid = getindex(grids, hparam_name)
+    hparam_keys = (keys(hparams)..., hparam_name)
+    ns = length(hparam_grid)
     alloc_score_arrays(a, b) = Array{Float64,2}(undef, a, b)
     result = (;
         train=alloc_score_arrays(ns, nfolds),
         validation=alloc_score_arrays(ns, nfolds),
         time=alloc_score_arrays(ns, nfolds),
+        param=hparam_name,
+        grid=hparam_grid,
     )
+
+    if progress_bar.desc == "Running CV w/ $(algorithm)... "
+        progress_bar = Progress(nfolds * length(hparam_grid); desc=progress_bar.desc, enabled=progress_bar.enabled)
+    end
 
     # Run cross-validation.
     for (k, fold) in enumerate(kfolds(data, k=nfolds, obsdim=1))
@@ -148,20 +195,20 @@ function cv_path(
         # Set initial value for rho.
         rho = rho_init
 
-        for (i, s) in enumerate(s_grid)
+        for (i, s) in enumerate(hparam_grid)
+            # Update the progress bar.
+            next!(progress_bar, showvalues=[(:fold, k), (hparam_name, s)])
+
             # Fit model.
-            if iszero(s)
-                timed_result = @timed MVDA.solve!(
-                    algorithm, train_problem, epsilon, lambda, extras; kwargs...
-                )
-            else
-                timed_result = @timed MVDA.solve_constrained!(
-                    algorithm, train_problem, epsilon, lambda, s, extras;
-                    projection_type=projection_type,
-                    rho_init=rho, 
-                    kwargs...
-                )
-            end
+            hparam_vals = (values(hparams)..., s)
+            _hparams = NamedTuple{hparam_keys}(hparam_vals)
+            timed_result = @timed MVDA.solve!(
+                f, algorithm, train_problem, _hparams, extras;
+                rng=rng,
+                projection_type=projection_type,
+                rho_init=rho, 
+                kwargs...
+            )
             
             measured_time = timed_result.time # seconds
             result.time[i,k] = measured_time
@@ -173,22 +220,18 @@ function cv_path(
             # Evaluate the solution.
             result.train[i,k] = scoref(train_problem, (train_L, train_X))
             result.validation[i,k] = scoref(train_problem, (val_L, val_X))
-
-            # Update the progress bar.
-            spercent = string(round(100*s, digits=4), '%')
-            next!(progress_bar, showvalues=[(:fold, k), (:sparsity, spercent)])
         end
     end
 
     return result
 end
 
-function init_cv_tune_progbar(algorithm, problem, nfolds, grids::Tuple{G1,G2,G3}, show_progress) where {G1,G2,G3}
+function init_cv_tune_progbar(algorithm, problem, nfolds, grids, show_progress)
     #
     if problem.kernel isa Nothing
-        nvals = number_of_param_vals((grids[1], grids[2]))
+        nvals = number_of_param_vals(grids.epsilon)
     else # isa Kernel
-        nvals = number_of_param_vals(grids)
+        nvals = number_of_param_vals((grids.epsilon, grids.gamma))
     end
     Progress(nfolds * nvals; desc="Running CV w/ $(algorithm)... ", enabled=show_progress)
 end
@@ -203,13 +246,10 @@ function cv_tune(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::G,
     kwargs...,
     ) where {D,G,S,T}
     #
-    e_grid, l_grid, g_grid = grids
+    (e_grid, g_grid) = (grids.epsilon, grids.gamma)
     # Sanity checks.
     if any(x -> x < 0 || x > 1, e_grid)
         error("Deadzone values should lie in [0,1].")
-    end
-    if any(<=(0), l_grid)
-        error("Lambda values must be positive.")
     end
     if any(<(0), g_grid)
         error("Gamma values must be nonnegative.")
@@ -217,16 +257,18 @@ function cv_tune(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::G,
 
     # Initialize the output.
     if problem.kernel isa Nothing
-        dims = (length(e_grid), length(l_grid), 1, nfolds)
+        dims = (length(e_grid), 1, nfolds)
+        g_grid = [zero(eltype(g_grid))]
     else # isa Kernel
-        dims = (length(e_grid), length(l_grid), length(g_grid), nfolds)
+        dims = (length(e_grid), length(g_grid), nfolds)
     end
-    alloc_score_arrays(dims) = Array{Float64,4}(undef, dims)
+    alloc_score_arrays(dims) = Array{Float64,3}(undef, dims)
     result = (;
         train=alloc_score_arrays(dims),
         validation=alloc_score_arrays(dims),
-        test=alloc_score_arrays(dims),
         time=alloc_score_arrays(dims),
+        epsilon=e_grid,
+        gamma=g_grid,
     )
 
     # Run cross-validation.
@@ -254,37 +296,39 @@ end
 function __cv_tune_loop__(::Kernel, fit_args::T1, grids::T2, data_subsets::T3, mutables::T4, k::Integer) where {T1,T2,T3,T4}
     #
     (algorithm, problem, scoref, kwargs) = fit_args
-    (e_grid, l_grid, g_grid) = grids
+    (e_grid, g_grid) = (grids.epsilon, grids.gamma)
     (train_L, train_X), (val_L, val_X) = data_subsets
     (result, progress_bar) = mutables
 
-    for (l, gamma) in enumerate(g_grid)
+    for (j, gamma) in enumerate(g_grid)
         # Create a problem object for the training set.
-        new_kernel = ScaledKernel(problem.kernel, gamma)
+        new_kernel = TransformedKernel(problem.kernel, ScaleTransform(gamma))
         train_problem = MVDAProblem(train_L, train_X, problem, new_kernel)
         extras = __mm_init__(algorithm, (Nothing, nothing), train_problem, nothing)
         param_sets = (train_problem.coeff, train_problem.coeff_prev, train_problem.coeff_proj)
 
-        # Set initial model parameters.
-        for coeff_nt in param_sets
-            foreach(Base.Fix2(fill!, 0), coeff_nt)
-        end
+        for (i, epsilon) in enumerate(e_grid)
+            # Update the progress bar.
+            next!(progress_bar, showvalues=[(:fold, k), (:epsilon, epsilon), (:gamma, gamma)])
 
-        for (i, epsilon) in enumerate(e_grid), (j, lambda) in enumerate(l_grid)
+            # Set initial model parameters.
+            for coeff_nt in param_sets
+                foreach(Base.Fix2(fill!, 0), coeff_nt)
+            end
+
             # Fit model.
+            hparams = (; epsilon=epsilon,)
             timed_result = @timed MVDA.solve!(
-                algorithm, train_problem, epsilon, lambda, extras; kwargs...
+                UnpenalizedObjective(SqEpsilonLoss()),
+                algorithm, train_problem, hparams, extras; kwargs...
             )
                 
             measured_time = timed_result.time # seconds
-            result.time[i,j,l,k] = measured_time
+            result.time[i,j,k] = measured_time
 
             # Evaluate the solution.
-            result.train[i,j,l,k] = scoref(train_problem, (train_L, train_X))
-            result.validation[i,j,l,k] = scoref(train_problem, (val_L, val_X))
-
-            # Update the progress bar.
-            next!(progress_bar, showvalues=[(:fold, k), (:epsilon, epsilon), (:lambda, lambda), (:gamma, gamma)])
+            result.train[i,j,k] = scoref(train_problem, (train_L, train_X))
+            result.validation[i,j,k] = scoref(train_problem, (val_L, val_X))
         end
     end
 end
@@ -292,7 +336,7 @@ end
 function __cv_tune_loop__(::Nothing, fit_args::T1, grids::T2, data_subsets::T3, mutables::T4, k::Integer) where {T1,T2,T3,T4}
     #
     (algorithm, problem, scoref, kwargs) = fit_args
-    (e_grid, l_grid, _) = grids
+    e_grid = grids.epsilon
     (train_L, train_X), (val_L, val_X) = data_subsets
     (result, progress_bar) = mutables
 
@@ -302,57 +346,54 @@ function __cv_tune_loop__(::Nothing, fit_args::T1, grids::T2, data_subsets::T3, 
     param_sets = (train_problem.coeff, train_problem.coeff_prev, train_problem.coeff_proj)
 
     gamma = 0.0
-    l = 1
+    j = 1
 
-    # Set initial model parameters.
-    for coeff_nt in param_sets
-        foreach(Base.Fix2(fill!, 0), coeff_nt)
-    end
+    for (i, epsilon) in enumerate(e_grid)
+        # Update the progress bar.
+        next!(progress_bar, showvalues=[(:fold, k), (:epsilon, epsilon), (:gamma, gamma)])
 
-    for (i, epsilon) in enumerate(e_grid), (j, lambda) in enumerate(l_grid)
+        # Set initial model parameters.
+        for coeff_nt in param_sets
+            foreach(Base.Fix2(fill!, 0), coeff_nt)
+        end
+
         # Fit model.
+        hparams = (; epsilon=epsilon,)
         timed_result = @timed MVDA.solve!(
-            algorithm, train_problem, epsilon, lambda, extras; kwargs...
+            UnpenalizedObjective(SqEpsilonLoss()),
+            algorithm, train_problem, hparams, extras; kwargs...
         )
             
         measured_time = timed_result.time # seconds
-        result.time[i,j,l,k] = measured_time
+        result.time[i,j,k] = measured_time
 
         # Evaluate the solution.
-        result.train[i,j,l,k] = scoref(train_problem, (train_L, train_X))
-        result.validation[i,j,l,k] = scoref(train_problem, (val_L, val_X))
-
-        # Update the progress bar.
-        next!(progress_bar, showvalues=[(:fold, k), (:epsilon, epsilon), (:lambda, lambda), (:gamma, gamma)])
+        result.train[i,j,k] = scoref(train_problem, (train_L, train_X))
+        result.validation[i,j,k] = scoref(train_problem, (val_L, val_X))
     end
 end
 
-function fit_tuned_model(algorithm, settings, (epsilon, lambda, gamma, sparsity), (train_set, test_set);
-    progress_bar=nothing,
+function fit_tuned_model(f, algorithm, settings, hparams, (train_set, test_set);
+    progress_bar::Union{Nothing,Progress}=nothing,
     kwargs...
-    )
+)
 #
     callback = HistoryCallback()
     add_field!(callback, :iters, :risk, :loss, :objective, :distance, :penalty, :gradient, :rho)
     problem = MVDAProblem(train_set[1], train_set[2], settings)
 
-    if iszero(sparsity)
-        timed_result = @timed MVDA.solve!(algorithm, problem, epsilon, lambda;
-            callback=callback,
-            kwargs...
-        )
-        if progress_bar isa Progress
-            next!(progress_bar, showvalues=[(:model, "reduced")])
-        end
-        else
-        timed_result = @timed MVDA.solve_constrained!(algorithm, problem, epsilon, lambda, sparsity;
-            callback=callback,
-            kwargs...
-        )
-        if progress_bar isa Progress
-            next!(progress_bar, showvalues=[(:model, "sparse")])
-        end
+    param_sets = (problem.coeff, problem.coeff_prev, problem.coeff_proj)
+    for coeff_nt in param_sets
+        foreach(Base.Fix2(fill!, 0), coeff_nt)
     end
+
+    timed_result = @timed MVDA.solve!(f, algorithm, problem, hparams;
+        callback=callback,
+        kwargs...
+    )
+    model_type = f isa UnpenalizedObjective ? "reduced" : "sparse"
+    progress_bar isa Progress && next!(progress_bar, showvalues=[(:model, model_type)])
+
     fit_time = timed_result.time
     fit_result = timed_result.value
 
@@ -363,25 +404,32 @@ function fit_tuned_model(algorithm, settings, (epsilon, lambda, gamma, sparsity)
         train=train_result,
         test=test_result,
         problem=problem,
-        epsilon=epsilon,
-        lambda=lambda,
-        gamma=gamma,
-        sparsity=sparsity,
+        hyperparameters=hparams,
         time=fit_time,
         result=fit_result,
         history=callback.data,
     )
 end
 
-function cv(algorithm::AbstractMMAlg, input_problem::MVDAProblem, grids::Tuple{G1,G2,G3,G4};
+function cv(
+    f::Union{UnpenalizedObjective{LOSS},PenalizedObjective{LOSS,PEN}},
+    algorithm::AbstractMMAlg,
+    input_problem::MVDAProblem,
+    grids::G;
+    # keyword argument
     data::D=split_dataset(input_problem, 0.8),
     nfolds::Int=5,
     scoref::S=DEFAULT_SCORE_FUNCTION,
     by::Symbol=:validation,
     minimize::Bool=false,
-    data_transform::Type{T}=ZScoreTransform,
+    data_transform::Type=ZScoreTransform,
+    projection_type::Type=HomogeneousL0Projection,
     kwargs...
-) where {D,G1,G2,G3,G4,S,T}
+) where {LOSS,PEN,D,G,S}
+    if f isa UnpenalizedObjective && !(algorithm isa PGD)
+        projection_type = Nothing
+    end
+
     # Split data into train/test.
     train_data, test_data = data
     train_L, train_X = getobs(train_data, obsdim=1)
@@ -389,179 +437,261 @@ function cv(algorithm::AbstractMMAlg, input_problem::MVDAProblem, grids::Tuple{G
     train_set = (train_L, train_X)
     test_set = (test_L, test_X)
 
-    # Extract grids.
-    e_grid, l_grid, g_grid, s_grid = grids
-
-    # Tune epsilon, lambda, and gamma jointly.
+    # Tune epsilon and gamma jointly.
     tune_problem = MVDAProblem(train_L, train_X, input_problem)
-    tune_grids = (e_grid, l_grid, g_grid)
-    tune_result = cv_tune(algorithm, tune_problem, tune_grids;
+    tune_result = cv_tune(algorithm, tune_problem, grids;
         scoref=scoref,
         nfolds=nfolds,
         data_transform=data_transform,
         kwargs...
     )
-    (_, (tune_score, epsilon, lambda, gamma)) = search_hyperparameters(tune_grids, tune_result,
+    (_, (tune_score, epsilon, gamma)) = search_hyperparameters(tune_result,
         by=by,
         minimize=minimize,
+        is_average=false
     )
 
     # Create problem object for variable selection step.
     if tune_problem.kernel isa Kernel
-        new_kernel = ScaledKernel(tune_problem.kernel, gamma)
+        new_kernel = TransformedKernel(tune_problem.kernel, ScaleTransform(gamma))
         var_select_problem = MVDAProblem(train_L, train_X, tune_problem, new_kernel)
     else
         var_select_problem = MVDAProblem(train_L, train_X, tune_problem, nothing)
         gamma = zero(gamma)
     end
+    hparams_path = (
+        epsilon=epsilon,
+        gamma=gamma,
+    )
 
     # Run model selection.
-    path_result = cv_path(algorithm, var_select_problem, epsilon, lambda, s_grid;
+    path_result = cv_path(f, algorithm, var_select_problem, hparams_path, grids;
         scoref=scoref,
         nfolds=nfolds,
         data_transform=data_transform,
+        projection_type=projection_type,
         kwargs...
     )
-    (_, (path_score, sparsity)) = search_sparsity(s_grid, path_result,
-        by=by,
-        minimize=minimize,
+    hparam_name = get_penalty_hyperparameter_name(f, projection_type)
+    hparam_grid = getindex(grids, hparam_name)
+
+    if hparam_name == :k
+        (_, (path_score, optimal_parameter)) = search_sparsity(hparam_grid, path_result,
+            by=by,
+            minimize=minimize,
+            is_average=false
+        )
+    elseif hparam_name == :lambda
+        (_, (path_score, optimal_parameter)) = search_lambda(hparam_grid, path_result,
+            by=by,
+            minimize=minimize,
+            is_average=false
+        )
+    end
+    hparam_keys = (:epsilon, :gamma, hparam_name)
+    hparam_vals = (epsilon, gamma, optimal_parameter)
+    _hparams = NamedTuple{hparam_keys}(hparam_vals)
+    hparams=(;
+        epsilon=epsilon,
+        gamma=gamma,
+        lambda=get(_hparams, :lambda, 0.0),
+        k=get(_hparams, :k, size(train_set[2], 2)),
     )
 
     # Fit sparse and reduced models.
     settings = var_select_problem
 
     # Final model using the entire dataset (sparse model).
-    params = (epsilon, lambda, gamma, sparsity)
     F = StatsBase.fit(data_transform, train_set[2], dims=1)
     __adjust_transform__(F)
     foreach(Base.Fix1(StatsBase.transform!, F), (train_set[2], test_set[2]))
-    fit_result = fit_tuned_model(algorithm, settings, params, (train_set, test_set); kwargs...)
+    fit_result = fit_tuned_model(f, algorithm, settings, hparams, (train_set, test_set); projection_type=projection_type, kwargs...)
 
     # Final model using the reduced dataset (reduced model).
-    params = (epsilon, lambda, gamma, zero(sparsity))
     (idx_sample, idx_feature), _ = extract_active_subset(fit_result.problem)
-
     r_train_set = (train_set[1][idx_sample], train_set[2][idx_sample, idx_feature])
     r_test_set = (test_set[1], test_set[2][:, idx_feature])
-
-    tmp = fit_tuned_model(algorithm, settings, params, (r_train_set, r_test_set); kwargs...)
+    reduced_model = UnpenalizedObjective(LOSS())
+    tmp = fit_tuned_model(reduced_model, algorithm, settings, hparams, (r_train_set, r_test_set); kwargs...)
     reduced_problem = MVDAProblem(train_set[1], train_set[2], settings)
     add_structural_zeros!(reduced_problem, tmp.problem, (idx_sample, idx_feature))
     reduced_result = (; tmp..., problem=reduced_problem,)
 
+    # Rescale the coefficients
+    rescale_coefficients!(F, fit_result.problem)
+    rescale_coefficients!(F, reduced_result.problem)
+
     return (;
+        model=f,
+        projection=projection_type,
+        kernel=settings.kernel,
         tune=(; score=tune_score, result=tune_result,),
         path=(; score=path_score, result=path_result,),
         fit=fit_result,
         reduced=reduced_result,
-        epsilon=epsilon,
-        lambda=lambda,
-        gamma=gamma,
-        sparsity=sparsity,
+        hyperparameters=hparams,
     )
 end
 
-function repeated_cv(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::Tuple{G1,G2,G3,G4};
+function repeated_cv(f::AbstractVDAModel, algorithm::AbstractMMAlg, problem::MVDAProblem, grids::G;
     at::Real=0.8,
     nfolds::Int=5,
     nreplicates::Int=10,
     show_progress::Bool=true,
-    rng::RNG=StableRNG(1903),
-    dir::String=mktempdir(pwd),
+    rng::RNG=Random.default_rng(),
+    projection_type::Type=HomogeneousL0Projection,
+    dir::String=mktempdir(pwd()),
     title::String="Example",
     overwrite::Bool=false,
-    kwargs...) where {G1,G2,G3,G4,RNG}
+    kwargs...
+    ) where {G,RNG}
 #
-    nvals = nreplicates * nfolds * number_of_param_vals((grids[1], grids[2], grids[3]))
-    nvals += nreplicates * nfolds * number_of_param_vals(grids[4])
-    nvals += 2
-    progress_bar = Progress(nvals; desc="Repeated CV... ", enabled=show_progress)
+    e_grid, g_grid = grids.epsilon, grids.gamma
+    hparam_name = get_penalty_hyperparameter_name(f, projection_type)
+    hparam_grid = getindex(grids, hparam_name)
 
-    # Split data into randomized cross-validation and test sets.
-    unshuffled_cv_set, test_set = split_dataset(problem, at)
+    if problem.kernel isa Nothing
+        dims = (length(e_grid), 1, nfolds)
+        g_grid = [zero(eltype(g_grid))]
+    else # isa Kernel
+        dims = (length(e_grid), length(g_grid), nfolds)
+    end
+
+    nvals_tune = number_of_param_vals((e_grid, g_grid))
+    nvals_path = number_of_param_vals(hparam_grid)
+    nvals_per_rep = nfolds * (nvals_tune + nvals_path) + 2
+    nvals = nreplicates * nvals_per_rep
+    progress_bar = Progress(nvals; desc="Repeated CV", enabled=show_progress)
+
+    unshuffled_set = get_dataset(problem)
 
     # Replicate CV procedure several times.
     for i in 1:nreplicates
-        # Shuffle cross validation set to permute the train/validation sets.
-        cv_set = shuffleobs(unshuffled_cv_set, obsdim=1, rng=rng)
+        progress_bar.desc = "Repeated CV | Replicate $(i) / $(nreplicates)"
+        # Split data into random training and test sets.
+        data = shuffleobs(unshuffled_set, obsdim=1, rng=rng)
+        cv_set, test_set = splitobs(data, at=at, obsdim=ObsDim.First())
 
         # Run cross validation pipeline.
-        result = cv(algorithm, problem, grids;
+        result = cv(f, algorithm, problem, grids;
             data=(cv_set, test_set),
             progress_bar=progress_bar,
             nfolds=nfolds,
+            rng=rng,
+            projection_type=projection_type,
             kwargs...
         )
 
         if i == 1
-            save_cv_results(dir, title, algorithm, grids, result; overwrite=overwrite)
+            save_cv_results(dir, title, algorithm, result; overwrite=overwrite)
         else
-            save_cv_results(dir, title, algorithm, grids, result; overwrite=false)
+            save_cv_results(dir, title, algorithm, result; overwrite=false)
         end
     end
+    finish!(progress_bar)
 
     @info "Saved CV results to disk" title=title dir=dir overwrite=overwrite
 
     return nothing
 end
 
-function search_hyperparameters(grids::Tuple{G1,G2,G3}, result::NamedTuple;
+function search_hyperparameters(result::NamedTuple;
     by::Symbol=:validation,
     minimize::Bool=false,
     is_average::Bool=false,
-) where {G1,G2,G3}
+) where G
     # Extract score data.
     if is_average
         data = getindex(result, by)
     else
-        avg_scores = mean(getindex(result, by), dims=4)
-        data = dropdims(avg_scores, dims=4)
-    end
-
-    # Sanity checks.
-    e_grid, l_grid, g_grid = grids
-    ne, nl, ng = length(e_grid), length(l_grid), length(g_grid)
-    if size(data) != (ne, nl, ng)
-        error("Data in NamedTuple is incompatible with ($ne,$nl,$ng) grid.")
+        avg_scores = mean(getindex(result, by), dims=3)
+        data = dropdims(avg_scores, dims=3)
     end
 
     if minimize
-        (best_i, best_j, best_l), best_quad = (0, 0, 0,), (Inf, Inf, Inf, Inf)
+        (best_i, best_j), best_triple = (0, 0,), (Inf, Inf, Inf)
     else
-        (best_i, best_j, best_l), best_quad = (0, 0, 0,), (-Inf, -Inf, -Inf, -Inf)
+        (best_i, best_j), best_triple = (0, 0,), (-Inf, -Inf, -Inf)
     end
 
-    epsilons, lambdas, gammas = enumerate(e_grid), enumerate(l_grid), enumerate(g_grid)
-    for (l, gamma) in gammas, (j, lambda) in lambdas, (i, epsilon) in epsilons
-        quad_score = data[i,j,l]
-        proposal = (quad_score, epsilon, lambda, gamma)
+    for j in axes(data, 2), i in axes(data, 1)
+        epsilon, gamma = result.epsilon[i], result.gamma[j]
+        triple_score = data[i,j]
+        proposal = (triple_score, epsilon, gamma)
 
-        # Check if this is the best pair. Rank by pair_score -> sparsity -> lambda.
+        # Check if this is the best triple.
         if minimize
             #
-            #   quad_score: We want to minimize the CV score; e.g. minimum prediction error.
+            #   triple_score: We want to minimize the CV score; e.g. minimum prediction error.
             #
-            t = (quad_score, 1/epsilon, 1/lambda, gamma)
-            r = (best_quad[1], 1/best_quad[2], 1/best_quad[3], best_quad[4])
+            t = (triple_score, 1/epsilon, gamma)
+            r = (best_triple[1], 1/best_triple[2], best_triple[3])
             if t < r
-                (best_i, best_j, best_l,), best_quad = (i, j, l,), proposal
+                (best_i, best_j,), best_triple = (i, j,), proposal
             end
         else
             #
-            #   quad_score: We want to maximize the CV score; e.g. maximum prediction accuracy.
+            #   triple_score: We want to maximize the CV score; e.g. maximum prediction accuracy.
             #
-            t = (quad_score, epsilon, lambda, 1/gamma)
-            r = (best_quad[1], best_quad[2], best_quad[3], 1/best_quad[4])
+            t = (triple_score, epsilon, 1/gamma)
+            r = (best_triple[1], best_triple[2], 1/best_triple[3])
             if t > r
-                (best_i, best_j, best_l,), best_quad = (i, j, l,), proposal
+                (best_i, best_j,), best_triple = (i, j,), proposal
             end
         end
     end
 
-    return ((best_i, best_j, best_l,), best_quad)
+    return ((best_i, best_j,), best_triple)
 end
 
-function search_sparsity(grid::AbstractVector, result::NamedTuple;
+function search_sparsity(grid::AbstractVector{Int}, result::NamedTuple;
+    by::Symbol=:validation,
+    minimize::Bool=false,
+    is_average::Bool=false,
+)
+    # Extract score data.
+    if is_average
+        data = getindex(result, by)
+    else
+        avg_scores = mean(getindex(result, by), dims=2)
+        data = dropdims(avg_scores, dims=2)
+    end
+
+    # Sanity checks.
+    if size(data) != size(grid)
+        error("Data in NamedTuple is incompatible with ($(length(grid)) × 1) grid.")
+    end
+
+    if minimize
+        best_i, best_pair = 0, (Inf, typemax(Int))
+    else
+        best_i, best_pair = 0, (-Inf, typemin(Int))
+    end
+
+    for (i, k) in enumerate(grid)
+        score = data[i]
+        proposal = (score, k)
+
+        # Check if this is the best value. Rank by score -> hyperparameter value.
+        if minimize
+            t = (score, 1.0*k)
+            r = (best_pair[1], 1.0*best_pair[2])
+            if t < r
+                best_i, best_pair = i, proposal
+            end
+        else
+            t = (score, 1.0/k)
+            r = (best_pair[1], 1.0/best_pair[2])
+            if t > r
+                best_i, best_pair = i, proposal
+            end
+        end
+    end
+
+    return (best_i, best_pair)
+end
+
+function search_lambda(grid::AbstractVector, result::NamedTuple;
     by::Symbol=:validation,
     minimize::Bool=false,
     is_average::Bool=false,
@@ -585,20 +715,20 @@ function search_sparsity(grid::AbstractVector, result::NamedTuple;
         best_i, best_pair = 0, (-Inf, -Inf)
     end
 
-    for (i, v) in enumerate(grid)
+    for (i, lambda) in enumerate(grid)
         score = data[i]
-        proposal = (score, v)
+        proposal = (score, lambda)
 
         # Check if this is the best value. Rank by score -> hyperparameter value.
         if minimize
-            t = (score, 1-v)
-            r = (best_pair[1], 1-best_pair[2])
+            t = (score, 1.0*lambda)
+            r = (best_pair[1], 1.0*best_pair[2])
             if t < r
                 best_i, best_pair = i, proposal
             end
         else
-            t = (score, v)
-            r = (best_pair[1], best_pair[2])
+            t = (score, 1.0/lambda)
+            r = (best_pair[1], 1.0/best_pair[2])
             if t > r
                 best_i, best_pair = i, proposal
             end
@@ -608,15 +738,13 @@ function search_sparsity(grid::AbstractVector, result::NamedTuple;
     return (best_i, best_pair)
 end
 
-function save_cv_results(dir::String, title::String, algorithm::AbstractMMAlg, grids::G, result::NT;
+function save_cv_results(dir::String, title::String, algorithm::AbstractMMAlg, result::NT;
     overwrite::Bool=false,
-) where {G,NT}
+) where NT
 #
     if !ispath(dir)
         mkpath(dir)
     end
-    # Extract grids.
-    e_grid, l_grid, g_grid, s_grid = grids
 
     # Filenames
     tune_filename = joinpath(dir, "cv_tune.out")
@@ -627,21 +755,19 @@ function save_cv_results(dir::String, title::String, algorithm::AbstractMMAlg, g
     # Other Setttings/Parameters
     delim = ','
     alg = string(typeof(algorithm))
-    epsilon = result.epsilon
-    lambda = result.lambda
-    gamma = result.gamma
+    hyperparameters = result.hyperparameters
 
     # CV Tune
-    tune_header = ("title", "algorithm", "replicate", "fold", "epsilon", "lambda", "gamma", "time", "train", "validation",)
+    tune_header = ("title", "algorithm", "replicate", "fold", "epsilon", "gamma", "time", "train", "validation",)
     replicate = init_report(tune_filename, tune_header, delim, overwrite)
     open(tune_filename, "a") do io
         r = result.tune.result
-        is, js, ls, ks = axes(r.time)
-        for k in ks, l in ls, j in js, i in is
-            cv_data = (title, alg, replicate, k, e_grid[i], l_grid[j], g_grid[l],
-                r.time[i,j,l,k],
-                r.train[i,j,l,k],
-                r.validation[i,j,l,k],
+        is, js, ks = axes(r.time)
+        for k in ks, j in js, i in is
+            cv_data = (title, alg, replicate, k, r.epsilon[i], r.gamma[j],
+                r.time[i,j,k],
+                r.train[i,j,k],
+                r.validation[i,j,k],
             )
             write(io, join(cv_data, delim), '\n')
         end
@@ -649,13 +775,20 @@ function save_cv_results(dir::String, title::String, algorithm::AbstractMMAlg, g
     end
 
     # CV Path
-    path_header = ("title", "algorithm", "replicate", "fold", "epsilon", "lambda", "gamma", "sparsity", "time", "train", "validation",)
+    path_header = ("title", "algorithm", "replicate", "fold", "epsilon", "gamma", "lambda", "k", "time", "train", "validation",)
     replicate = init_report(path_filename, path_header, delim, overwrite)
     open(path_filename, "a") do io
         r = result.path.result
         is, ks = axes(r.time)
         for k in ks, i in is
-            cv_data = (title, alg, replicate, k, epsilon, lambda, gamma, s_grid[i],
+            if r.param == :lambda
+                lambda = r.grid[i]
+                param_k = hyperparameters.k
+            elseif r.param == :k
+                lambda = hyperparameters.lambda
+                param_k = r.grid[i]
+            end
+            cv_data = (title, alg, replicate, k, hyperparameters.epsilon, hyperparameters.gamma, lambda, param_k,
                 r.time[i,k],
                 r.train[i,k],
                 r.validation[i,k],
@@ -688,17 +821,18 @@ function save_fit_results(dir::String, title::String, algorithm::AbstractMMAlg, 
     # Other Setttings/Parameters
     delim = ','
     alg = string(typeof(algorithm))
-    epsilon = result.epsilon
-    lambda = result.lambda
-    gamma = result.gamma
-    sparsity = result.sparsity
+    hyperparameters = result.hyperparameters
+    epsilon = hyperparameters.epsilon
+    lambda = hyperparameters.lambda
+    gamma = hyperparameters.gamma
+    k = hyperparameters.k
     labels = result.problem.labels
 
     # Fit Result
-    fit_header = ("title", "algorithm", "replicate", "epsilon", "lambda", "gamma", "sparsity", "active_variables", "time", "train", "test",)
+    fit_header = ("title", "algorithm", "replicate", "epsilon", "lambda", "gamma", "k", "active_variables", "time", "train", "test",)
     replicate = init_report(fit_filename, fit_header, delim, overwrite)
     open(fit_filename, "a") do io
-        fit_data = (title, alg, replicate, epsilon, lambda, gamma, sparsity,
+        fit_data = (title, alg, replicate, epsilon, lambda, gamma, k,
             count_active_variables(result.problem),
             result.time,
             result.train.score,
