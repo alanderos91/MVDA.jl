@@ -1,3 +1,91 @@
+# From MLBase.jl; until we can migrate away from deprecated packages.
+function unique_inverse(A::AbstractArray)
+  out = Array{eltype(A)}(undef, 0)
+  out_idx = Array{Vector{Int}}(undef, 0)
+  seen = Dict{eltype(A), Int}()
+  for (idx, x) in enumerate(A)
+      if !in(x, keys(seen))
+          seen[x] = length(seen) + 1
+          push!(out, x)
+          push!(out_idx, Int[])
+      end
+      push!(out_idx[seen[x]], idx)
+  end
+  out, out_idx
+end
+
+struct StratifiedKfold
+  n::Int                         #Total number of observations
+  permseqs::Vector{Vector{Int}}  #Vectors of vectors of indexes for each stratum
+  k::Int                         #Number of splits
+  coeffs::Vector{Float64}        #About how many observations per strata are in a val set
+  function StratifiedKfold(rng::AbstractRNG, strata, k)
+      2 <= k <= length(strata) || error("The value of k must be in [2, length(strata)].")
+      strata_labels, permseqs = unique_inverse(strata)
+      map( s -> shuffle!(rng, s), permseqs)
+      coeffs = Float64[]
+      for (stratum, permseq) in zip(strata_labels, permseqs)
+          k <= length(permseq) || error("k is greater than the length of stratum $stratum")
+          push!(coeffs, length(permseq) / k)
+      end
+      new(length(strata), permseqs, k, coeffs)
+  end
+end
+
+StratifiedKfold(strata, k) = StratifiedKfold(Random.GLOBAL_RNG, strata, k)
+
+length(c::StratifiedKfold) = c.k
+
+function Base.iterate(c::StratifiedKfold, s::Int=1)
+  (s > c.k) && return nothing
+  r = Int[]
+  for (permseq, coeff) in zip(c.permseqs, c.coeffs)
+      a, b = round.(Integer, [s-1, s] .* coeff)
+      append!(r, view(permseq, a+1:b))
+  end
+  return setdiff(1:c.n, r), s+1
+end
+
+struct StratifiedRandomSub
+  idxs::Vector{Vector{Int}}    # total length
+  sn::Int                      # length of subset
+  sns::Vector{Int}             # num from each stratum for each subset
+  k::Int                       # number of subsets
+  function StratifiedRandomSub(strata, sn, k)
+      n = length(strata)
+      strata_labels, idxs = unique_inverse(strata)
+      sn >= length(strata_labels) || error("sn is too small for all strata to be represented")
+      lengths_ord = sortperm(map(length, idxs))
+      sns = zeros(Int, n)
+      remaining_n = n   # total in the strata we haven't seen yet
+      remaining_sn = sn # total room in the subset that hasn't been "assinged" to a stratum yet
+      #loop through strata from smallest to largest, making sure there is at least one idx
+      #from each strata in each subset:
+      for stratum_num in lengths_ord
+          stratum_n = length(idxs[stratum_num])
+          remaining_proportion = remaining_sn/remaining_n
+          stratum_sn = max(round.(Integer, remaining_proportion*stratum_n), 1)
+          remaining_n -= stratum_n
+          remaining_sn -= stratum_sn
+          sns[stratum_num] = stratum_sn
+      end
+      #@assert mapreduce(sum, +, sns) == sn
+      new(idxs, sn, sns, k)
+  end
+end
+
+length(c::StratifiedRandomSub) = c.k
+
+function iterate(c::StratifiedRandomSub, s::Int=1)
+  (s > c.k) && return nothing
+  idxs = Array{Int}(undef, 0)
+  sizehint!(idxs, c.sn)
+  for (stratum_sn, stratum_idxs) in zip(c.sns, c.idxs)
+      append!(idxs, sample(stratum_idxs, stratum_sn, replace=false))
+  end
+  return (sort!(idxs), s + 1)
+end
+
 # https://discourse.julialang.org/t/how-to-read-only-the-last-line-of-a-file-txt/68005/10
 function read_last(file)
     open(file) do io
@@ -114,20 +202,35 @@ function get_penalty_hyperparameter_name(::UnpenalizedObjective{L}, ::Type{P}) w
 end
 
 """
-    cv_path(algorithm, problem, grids; [at], [kwargs...])
+    cv_path(f, algorithm, problem, hparams, grids, [data]; [kwargs...])
 
-Split data in `problem` into cross-validation and a test sets, then run CV over the `grids`.
+Perform variable selection by running CV over the `grids`, using the pre-tuned hyperparameters in `hparams`.
+
+!!! note
+The following text documents arguments specific to `cv_path(...)`. You may set additional keyword arguments that are delegated to `MVDA.solve!` in fitting individual models. See [`solve!`](@ref), [`solve_constrained!`](@ref), or [`solve_unconstrained!`](@ref) for details.
+!!!
+
+# Arguments
+
+- `f`: An `AbstractVDAModel` defining the objective.
+- `algorithm`: Choice of algorithm to minimize the given objective `f`.
+- `problem`: A `MVDAProblem` specifying the VDA settings (linear vs nonlinear, intercept, vertex ecoding). If the positional argument `data` is not specified, then the data wrapped by `problem` is used for CV.
+- `hparams`: A `NamedTuple` specifying values for hyperparameters unrelated to variable selection. For example, `(; epsilon=maximum_deadzone(problem))`
+  fixes the value for deadzone parameter in VDA to its largest possible value.
+- `grids`: A `NamedTuple` containing a grid for either `k` (for L0 type penalties) or `lambda` (for L1 and L2 type penalties). For example, `(; k=[16, 8, 4, 2])` can be used to search 
+  over models using 16, 8, 4, and 2 predictors (in that order) when using the `projection_type=HomogeneousL0Projection` option. See also [`make_sparsity_grid`](@ref) and [`make_log10_grid`](@ref).
+- `data`: The data to use for variable selection. It should enter as a `Tuple`, `(L, X)`, where `L` is a vector of class labels for each sample in the data matrix `X`, given as rows of the matrix. (default: `data=get_dataset(problem)` where `problem` is the given `MVDAProblem`)
 
 # Keyword Arguments
 
-- `at`: A value between `0` and `1` indicating the proportion of samples/instances used for
-  cross-validation, with remaining samples used for a test set (default=`0.8`).
+- `projection_type`: Choice of projection type to implicitly enforce a constraint for variable selection.
 - `nfolds`: The number of folds to run in cross-validation.
 - `scoref`: A function that evaluates a classifier over training, validation, and testing sets 
   (default uses misclassification error).
-- `show_progress`: Toggles progress bar.
-  
-  Additional arguments are propagated to `solve_constrained!` and `solve_unconstrained!`. See also [`MVDA.solve_constrained!`](@ref) and [`MVDA.solve_unconstrained!`](@ref).
+- `show_progress`: Toggles the progress bar.
+- `data_transform`: A data transformation type from StatsBase applied to data subsets in cross validation. (default: `data_transform=ZScoreTransform`)
+- `rho_init`: An initial value for the penalty strength parameter, `rho`. (default: `rho_init=DEFAULT_RHO_INIT`)
+- `rng`: A random number generator used to make CV runs reproducible. Use RNGs from `StableRNGs` for complete reproducibility. (default: `Random.default_rng()`)
 """
 function cv_path(
     f::AbstractVDAModel,
@@ -171,7 +274,10 @@ function cv_path(
 
     # Run cross-validation.
     for (k, fold) in enumerate(kfolds(data, k=nfolds, obsdim=1))
+    # for (k, idx) in enumerate(StratifiedKfold(data[1], nfolds))
         # Retrieve the training set and validation set.
+        # idx2 = setdiff(1:length(data[1]), idx)
+        # fold = ((view(data[1], idx), view(data[2], idx, :)), (view(data[1], idx2), view(data[2], idx2, :)))
         train_set, validation_set = fold
         train_L, train_X = getobs(train_set, obsdim=1)
         val_L, val_X = getobs(validation_set, obsdim=1)
@@ -236,6 +342,11 @@ function init_cv_tune_progbar(algorithm, problem, nfolds, grids, show_progress)
     Progress(nfolds * nvals; desc="Running CV w/ $(algorithm)... ", enabled=show_progress)
 end
 
+"""
+    cv_tune(algorithm, problem, hparams, grids, [data]; [kwargs...])
+
+TODO
+"""
 function cv_tune(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::G,
     data::D=get_dataset(problem);
     nfolds::Int=5,
@@ -273,7 +384,10 @@ function cv_tune(algorithm::AbstractMMAlg, problem::MVDAProblem, grids::G,
 
     # Run cross-validation.
     for (k, fold) in enumerate(kfolds(data, k=nfolds, obsdim=1))
+    # for (k, idx) in enumerate(StratifiedKfold(data[1], nfolds))
         # Retrieve the training set and validation set.
+        # idx2 = setdiff(1:length(data[1]), idx)
+        # fold = ((view(data[1], idx), view(data[2], idx, :)), (view(data[1], idx2), view(data[2], idx2, :)))
         train_set, validation_set = fold
         train_L, train_X = getobs(train_set, obsdim=1)
         val_L, val_X = getobs(validation_set, obsdim=1)
@@ -411,6 +525,11 @@ function fit_tuned_model(f, algorithm, settings, hparams, (train_set, test_set);
     )
 end
 
+"""
+    cv(f, algorithm, problem, grids; [kwargs]...)
+
+TODO
+"""
 function cv(
     f::Union{UnpenalizedObjective{LOSS},PenalizedObjective{LOSS,PEN}},
     algorithm::AbstractMMAlg,
@@ -533,6 +652,11 @@ function cv(
     )
 end
 
+"""
+    repeated_cv(f, algorithm, problem, grids; [kwargs]...)
+
+TODO
+"""
 function repeated_cv(f::AbstractVDAModel, algorithm::AbstractMMAlg, problem::MVDAProblem, grids::G;
     at::Real=0.8,
     nfolds::Int=5,

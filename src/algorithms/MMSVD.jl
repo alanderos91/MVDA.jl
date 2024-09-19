@@ -16,7 +16,7 @@ function __mm_init__(::MMSVD, (projection_type, rng), problem::MVDAProblem, ::No
     projection = make_projection(projection_type, rng, nparams, nd)
 
     # thin SVD of A
-    F = __compute_svd__(A)
+    F = svd(A, full=false)
     r = length(F.S)
 
     # constants
@@ -26,7 +26,7 @@ function __mm_init__(::MMSVD, (projection_type, rng), problem::MVDAProblem, ::No
     Z = fill!(similar(A, n, nd), zero(T))
     buffer = fill!(similar(A, r, nd), zero(T))
     Psi = Diagonal(fill!(similar(A, r), 0))
-    
+
     return (;
         projection=projection,
         U=F.U, s=F.S, V=Matrix(F.V),
@@ -60,17 +60,27 @@ function __mm_update_datastructures__(::MMSVD, f::UnpenalizedObjective{SqEpsilon
     problem, extras, hparams)
     @unpack s, Psi = extras
     n, _, _ = probsizes(problem)
+    atol = maximum(s) * sqrt(eps(eltype(s)))
     for i in eachindex(Psi.diag)
-        Psi.diag[i] = n / (s[i]^2)
+        if s[i] >= atol
+            Psi.diag[i] = n / (s[i]^2)
+        else
+            Psi.diag[i] = zero(eltype(s))
+        end
     end
     return nothing
 end
 
 function update_diagonal(extras, alpha, beta)
     @unpack s, Psi = extras
+    atol = maximum(s) * sqrt(eps(eltype(s)))
     for i in eachindex(Psi.diag)
-        s2 = s[i]^2
-        Psi.diag[i] = alpha*s2 / (alpha*s2 + beta)
+        if s[i] >= atol
+            s2 = s[i]^2
+            Psi.diag[i] = alpha*s2 / (alpha*s2 + beta)
+        else
+            Psi.diag[i] = zero(eltype(s))
+        end
     end
     return nothing
 end
@@ -78,7 +88,7 @@ end
 # Solves H*B = C, where H = (γ*A'A + β*I), using thin SVD of A.
 # The SVD makes it so that H⁻¹ = β⁻¹ * [I - V Ψ Vᵀ] and γ is absorved in Psi.
 function __apply_inverse__!(B, Hinv, C, buffer, alpha::Real=zero(eltype(B)))
-    beta, V, Psi = Hinv
+    beta, V, Psi, _ = Hinv
     if iszero(alpha)    # compute B = H⁻¹ C
         copyto!(B, C)
         BLAS.scal!(1/beta, B)
@@ -117,24 +127,26 @@ function __apply_pseudoinverse__!(B, Hpinv, C, buffer, alpha::Real=zero(eltype(B
 end
 
 function __inverse_quadratic_form__(Hinv, x, buffer)
-    beta, V, Psi = Hinv
+    _, _, Psi, U = Hinv
     T = eltype(buffer)
-    BLAS.gemv!('T', one(T), V, x, zero(T), buffer)
+    sum!(buffer, transpose(U))
     for i in eachindex(buffer)
         buffer[i] = sqrt(Psi.diag[i]) * buffer[i]
     end
 
-    return 1/beta * (BLAS.dot(x, x) - BLAS.dot(buffer, buffer))
+    return BLAS.dot(buffer, buffer) / size(U, 1)
 end
 
 function __pseudoinverse_quadratic_form__(Hpinv, x, buffer)
-    V, Psi, _ = Hpinv
+    # V, Psi, _ = Hpinv
+    _, Psi, U = Hpinv
     T = eltype(buffer)
-    BLAS.gemv!('T', one(T), V, x, zero(T), buffer)
-    for i in eachindex(buffer)
-        buffer[i] = sqrt(Psi.diag[i]) * buffer[i]
+    fill!(buffer, 0)
+    for i in axes(Psi, 1)
+      if Psi.diag[i] > 0
+        buffer .+= view(U, i, :) / size(U, 1) # temp
+      end
     end
-
     return BLAS.dot(buffer, buffer)
 end
 
@@ -155,18 +167,19 @@ function __linear_solve_SVD__(LHS_and_RHS::Function, apply_inv!, eval_quadratic_
     # Apply (generalized) Schur complement in H to compute intercept and shift coefficients.
     if intercept
         # 2. Compute (generalized) Schur complement, s = 1 - x̄ᵀH⁻¹x̄
-        s = 1 - eval_quadratic_form(Hinv, Abar, view(buffer, :, 1))
-        # if s == 0 error("Case not implemented") end
-        s = ifelse(iszero(s), one(s), s)
-        
-        # 3. Compute new intercept, b₀ = s⁻¹[z̄ - Bᵀx̄]
-        mean!(b0, Z')
-        BLAS.gemv!('T', -T(1/s), B, Abar, T(1/s), b0)
+        s = exp(log1p(-eval_quadratic_form(Hinv, Abar, view(buffer, :, 1))))
+        if isapprox(s, zero(s); rtol=sqrt(eps()))
+          fill!(b0, 0)
+        else
+          # 3. Compute new intercept, b₀ = s⁻¹[z̄ - Bᵀx̄]
+          mean!(b0, Z')
+          BLAS.gemv!('T', -T(1/s), B, Abar, T(1/s), b0)
 
-        # 4. Compute new slopes, B = B - H⁻¹(x̄*b₀ᵀ)
-        fill!(C, zero(T))
-        BLAS.ger!(one(T), Abar, b0, C)
-        apply_inv!(B, Hinv, C, buffer, -one(T))
+          # 4. Compute new slopes, B = B - H⁻¹(x̄*b₀ᵀ)
+          fill!(C, zero(T))
+          BLAS.ger!(one(T), Abar, b0, C)
+          apply_inv!(B, Hinv, C, buffer, -one(T))
+        end
     end
 
     return nothing
@@ -192,10 +205,10 @@ function __mm_iterate__(::MMSVD, f::PenalizedObjective{SqEpsilonLoss,PENALTY},
         function(problem, extras)
             A = design_matrix(problem)
 
-            # LHS: H = γ*A'A + β*I; pass as (β, V, Ψ) which computes H⁻¹ = β⁻¹[I - V Ψ Vᵀ]
-            H = (c2, extras.V, extras.Psi)
+            # LHS: H = c₁*A'A + c₂*I; pass as (c₂, V, Ψ) which computes H⁻¹ = β⁻¹[I - V Ψ Vᵀ]
+            H = (c2, extras.V, extras.Psi, extras.U)
 
-            # RHS: C = 1/n*AᵀZₘ
+            # RHS: C = c₁*AᵀZₘ + c₃P(Bₘ)
             C = problem.coeff_proj.slope
             BLAS.gemm!('T', 'N', c1, A, extras.Z, c3, C)
             return H, C

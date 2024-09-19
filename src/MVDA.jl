@@ -11,7 +11,7 @@ using Parameters
 using KernelFunctions, LinearAlgebra, Random, StableRNGs, Statistics, StatsBase
 
 # Imports
-import Base: show, iterate
+import Base: length, show, iterate
 import MLDataUtils: classify, predict, ind2label, label2ind, isposlabel, isneglabel, islabelenc
 import MLLabelUtils: VectorLabelEncoding
 

@@ -157,6 +157,11 @@ function geometric_progression(multiplier::Real=1.2)
     return GeometricProression(multiplier)
 end
 
+"""
+    make_sparsity_grid(n, len)
+
+TODO
+"""
 function make_sparsity_grid(n, len)
     xs = Float64[]
     push!(xs, 0.0)
@@ -188,6 +193,11 @@ function make_regular_log10_grid(a, b, m)
     return unique!(xs)
 end
 
+"""
+    make_log10_grid(a, b, n)
+
+TODO
+"""
 function make_log10_grid(a, b, n)
     if a == -Inf
         [0.0; 10.0 .^ range(log10(eps()), b, length=n-1)]

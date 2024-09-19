@@ -37,8 +37,7 @@ otherwise the matrix `K` is used for the design (`kernel isa Kernel`).
 - `c`: Number of classes represented in vertex space.
 
 - `encoding`: A type representing the simplex vertices used to represent labels.
-- `kernel`: A `Kernel` object from KernelFunctions.jl. See also: [`Kernel`](@ref).
-  (default: `kernel=nothing`)
+- `kernel`: A `Kernel` object from KernelFunctions.jl. (default: `kernel=nothing`)
 - `labels`: An ordered list of labels in which labels[i] corresponds to the i-th vertex in
   the `encoding`.
 - `intercept`: Indicates whether the design matrix/model include an intercept term.

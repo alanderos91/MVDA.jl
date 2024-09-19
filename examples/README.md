@@ -33,6 +33,8 @@ Pkg.instantiate()
 
 This will take a while but is only run once. In the future you can simply do `import Pkg; Pkg.activate(".")` as is done in the scripts.
 
+**NOTE**: It is likely that building RCall.jl will fail. The benchmarks use an R installation separate from the user's local copy, so we fix this in the next section.
+
 ## Installing Packages for Benchmarks
 
 The benchmarks require a few external packages. We use Julia's package manager and Conda to handle these dependencies.

@@ -88,7 +88,7 @@ function run(dir, example, input_data, (ne, ng, nl, ns), projection_type, preshu
 
     # Lambda grid.
     l_grid = if nl > 1
-        sort!(MVDA.make_log10_grid(-6, 6, nl), rev=true) # large values (less shrinkage) to small values (more shrinkage)
+        sort!(MVDA.make_log10_grid(-6, 6, nl), rev=true)
     else
         [1.0]
     end

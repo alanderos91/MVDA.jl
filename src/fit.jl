@@ -1,3 +1,8 @@
+"""
+    solve!()
+
+TODO
+"""
 function solve!(f::AbstractVDAModel, args...; kwargs...)
     solve_unconstrained!(f, args...; kwargs...)
 end
@@ -10,6 +15,11 @@ function solve!(f::AbstractVDAModel, algorithm::PGD, args...; kwargs...)
     solve_constrained!(f, algorithm, args...; kwargs...)
 end
 
+"""
+    solve_unconstrained!(f, algorithm, problem, hparams; [kwargs]...)
+
+TODO
+"""
 function solve_unconstrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, problem::MVDAProblem, hparams,
     _extras_::T=nothing;
     maxiter::Int=DEFAULT_MAXITER,
@@ -75,6 +85,11 @@ function solve_unconstrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, pro
     return ((iters, state), zero(floatT))
 end
 
+"""
+    solve_constrained!(f, algorithm, problem, hparams; [kwargs]...)
+
+TODO
+"""
 function solve_constrained!(f::AbstractVDAModel, algorithm::AbstractMMAlg, problem::MVDAProblem, hparams,
     _extras_::T=nothing;
     projection_type::Type=HomogeneousL0Projection,
@@ -199,6 +214,11 @@ function solve_constrained!(f::AbstractVDAModel, algorithm::PGD, problem::MVDAPr
     return ((iters, state), zero(floatT))
 end
 
+"""
+    solve_unconstrained!(f::PenalizedObjective{LOSS,SqDistPenalty}, algorithm, problem, hparams; [kwargs]...)
+
+TODO
+"""
 function solve_unconstrained!(f::PenalizedObjective{LOSS,SqDistPenalty}, algorithm::AbstractMMAlg, problem::MVDAProblem, hyperparams,
     _extras_::T=nothing;
     projection_type::Type=HomogeneousL0Projection,
