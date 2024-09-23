@@ -1,3 +1,9 @@
+#
+#   Set Environment: examples/Project.toml + examples/Manifest.toml
+#
+import Pkg
+Pkg.activate(".")
+
 using MVDA
 using MVDA.DataDeps
 using CSV, DataFrames, DataFramesMeta, Latexify, LaTeXStrings, CairoMakie
@@ -16,9 +22,12 @@ const ABBREVIATIONS = Dict(
     "HeterogeneousL0Projection" => "HetL0",
     "HomogeneousL1BallProjection" => "HomL1",
     "HeterogeneousL1BallProjection" => "HetL1",
+    "L1RSVM" => "L1R-SVM",
 )
 
 ##### Helper functions #####
+find_nz(x) = findall(x -> norm(x) != 0, eachrow(x))
+
 function load_synth1_data(dir::AbstractString)
     data = CSV.read(joinpath(dir, "synth_homogeneous.csv"), DataFrame)
     transform!(data, [:true_features, :active_features] => ByRow((x, y) -> x / y) => :ppv)
@@ -77,12 +86,23 @@ function plot_cv_path!(ax, path_df, nvars)
     return ax
 end
 
-load_dfs(dir, example, proj) = (
-    CSV.read(joinpath(dir, example, proj, "cv_tune.out"), DataFrame),
-    CSV.read(joinpath(dir, example, proj, "cv_path.out"), DataFrame),
-    CSV.read(joinpath(dir, example, proj, "modelA", "summary.out"), DataFrame),
-    CSV.read(joinpath(dir, example, proj, "modelB", "summary.out"), DataFrame)
-)
+function load_dfs(dir, example, proj)
+  if proj == "L1RSVM"
+    (
+      nothing,
+      nothing,
+      CSV.read(joinpath(dir, example, proj, "modelA", "summary.out"), DataFrame),
+      nothing,
+    )
+  else
+    (
+      CSV.read(joinpath(dir, example, proj, "cv_tune.out"), DataFrame),
+      CSV.read(joinpath(dir, example, proj, "cv_path.out"), DataFrame),
+      CSV.read(joinpath(dir, example, proj, "modelA", "summary.out"), DataFrame),
+      CSV.read(joinpath(dir, example, proj, "modelB", "summary.out"), DataFrame)
+    )
+  end
+end
 
 function load_replicate_data(dir, example, proj, model, filename)
     example_dir = joinpath(dir, example, proj, model)
@@ -224,7 +244,8 @@ function TCGA_topgenes(dir, projection)
     class_reference = problem.labels
     n_classes = length(class_reference)
 
-    gene_reference = CSV.read("/home/alanderos/Downloads/TCGA-PANCAN-HiSeq-genes.csv", DataFrame)[!,:symbol]
+    reffile = joinpath(dirname(dir), "TCGA-PANCAN-HiSeq-genes.csv")
+    gene_reference = CSV.read(reffile, DataFrame)[!,:symbol]
     selected_genes = CSV.read(datadep"MVDA/TCGA-HiSeq.cols", DataFrame, header=false)[1:end-2,1]
     genes = gene_reference[selected_genes]
     common_kwargs = (;
@@ -234,7 +255,6 @@ function TCGA_topgenes(dir, projection)
         yticks=LinearTicks(6),
     )
 
-    find_nz(x) = findall(x -> norm(x) != 0, eachrow(x))
     coeff = [MVDA.load_model(joinpath(dir, "TCGA-HiSeq", projection, "modelA", "$(k)")).coeff_proj.slope for k in 1:10]
 
     # compute counts and average coefficients
@@ -536,7 +556,7 @@ function timing_table(dir, examples, projs)
         return combine(groupby(df, :replicate), :time => sum)[!, 2]
     end
     global ABBREVIATIONS
-    colnames = [""; map(id -> ABBREVIATIONS[id], projs)]
+    colnames = String[""; map(id -> ABBREVIATIONS[id], projs)]
     df = rename!(DataFrame(Matrix{String}(undef, 0, length(colnames)), :auto), colnames)
     for example in examples
         newrow = String[]
@@ -608,38 +628,41 @@ function fetch_metric((df1, df2), col, alpha)
     str_summarize_col(data, col, alpha, fmt)
 end
 
-function make_comparative_table_by_example(dir, examples; alpha=0.05)
+function make_comparative_table_by_example(dir, examples, projections; alpha=0.05)
     global ABBREVIATIONS
 
     io = IOBuffer()
 
-    write(io, "\\begin{tabular}{ccccccc}\n")
+    ncolumns = length(projections)
+    nsubcols = 2
+    write(io, "\\begin{tabular}{c$(repeat("c", ncolumns*nsubcols))}\n")
     write(io, "\\toprule\n")
-    write(io, "    & \\multicolumn{2}{c}{HomL0} & \\multicolumn{2}{c}{HetL0} & \\multicolumn{2}{c}{HetL1} \\\\\n")
-    write(io, "    \\cmidrule(lr){2-3}    \\cmidrule(lr){4-5}    \\cmidrule(lr){6-7}\n")
-    write(io, "    & Error (\\%) & \\# Active & Error (\\%) & \\# Active & Error (\\%) & \\# Active \\\\\n")
+    col_label, col_rule = String[], String[]
+    for (k, projection) in enumerate(projections)
+      st = 2+nsubcols*(k-1)
+      sp = st+nsubcols-1
+      push!(col_label, "& \\multicolumn{$(nsubcols)}{c}{$(ABBREVIATIONS[projection])}")
+      push!(col_rule,  "    \\cmidrule(lr){$(st)-$(sp)}")
+    end
+    write(io, "    $(join(col_label, "")) \\\\\n")
+    write(io, "$(join(col_rule, ""))\n")
+    write(io, "    $(repeat("& Error (\\%) & \\# Active ", ncolumns))\\\\\n")
     write(io, "\\midrule\n")
 
     for example in examples
-        _, unused, df1, _ = load_dfs(dir, example, "HomogeneousL0Projection")
-        data1_err = fetch_metric((unused, df1), :test, alpha)
-        data1_act = fetch_metric((unused, df1), :active_variables, alpha)
-
-        _, unused, df2, _ = load_dfs(dir, example, "HeterogeneousL0Projection")
-        data2_err = fetch_metric((unused, df2), :test, alpha)
-        data2_act = fetch_metric((unused, df2), :active_variables, alpha)
-
-        _, unused, df3, _ = load_dfs(dir, example, "HeterogeneousL1BallProjection")
-        data3_err = fetch_metric((unused, df3), :test, alpha)
-        data3_act = fetch_metric((unused, df3), :active_variables, alpha)
-
-        write(io, "$(example)
-            & $(data1_err)
-            & $(data1_act)
-            & $(data2_err)
-            & $(data2_act)
-            & $(data3_err)
-            & $(data3_act) \\\\\n")
+        write(io, "$(example)")
+        for projection in projections
+          if ispath(joinpath(dir, example, projection))
+            _, unused, df, _ = load_dfs(dir, example, projection)
+            data_err = fetch_metric((unused, df), :test, alpha)
+            data_act = fetch_metric((unused, df), :active_variables, alpha)
+          else
+            data_err = "Omitted"
+            data_act = "Omitted"
+          end
+          write(io, " & $(data_err) & $(data_act)")
+        end
+        write(io, " \\\\\n")
     end
 
     write(io, "\\bottomrule\n")
@@ -695,6 +718,161 @@ function synthetic_table_summary(df)
     tbl = String(take!(io))
     close(io)
     return tbl
+end
+
+function detailed_results(dir, example, projections, nreps; alpha=0.05)
+  prob(x...) = x ./ sum(x)
+  global ABBREVIATIONS
+
+  # Collect results for each scenario
+  classes = String[]
+  r = Dict()
+  for projection in projections
+    # Overall
+    results = Dict(); results["total"] = Dict()
+    _, unused, df, _ = load_dfs(dir, example, projection)
+
+    # Load confusion matrix and coefficients.
+    tmpcfmat = [CSV.read(joinpath(dir, example, projection, "modelA", "$(k)", "confusion_matrix.out"), DataFrame) for k in 1:nreps]
+    if projection == "L1RSVM"
+      coeff = [zeros(1, 1) for k in 1:nreps]
+    else
+      coeff = [MVDA.load_model(joinpath(dir, example, projection, "modelA", "$(k)")).coeff_proj.slope for k in 1:nreps]
+    end
+    
+    # Count the number of times each gene is selected in CV replicates.
+    gene_count = zeros(Int, size(coeff[1]))
+    for i in axes(gene_count, 2)
+        eff = map(x -> vec(x[:, i]), coeff)
+        nz_row = map(find_nz, eff)
+        for arr in nz_row, j in arr
+          gene_count[j, i] += 1
+        end
+    end
+
+    # overall
+    results["total"]["error"] = fetch_metric((unused, df), :test, alpha)
+    results["total"]["active"] = fetch_metric((unused, df), :active_variables, alpha)
+
+    # Extract class labels.
+    if isempty(classes)
+      for class in names(tmpcfmat[1])[3:end]
+        push!(classes, class)
+        results[class] = Dict()
+      end
+    else
+      for class in classes
+        results[class] = Dict()
+      end
+    end
+
+    # Reformat the confusion matrix into a true DataFrame.
+    cfmat = DataFrame()
+    for (k, df) in enumerate(tmpcfmat)
+      filter!("subset" => isequal("test"), df)
+      select!(df, Not(1:2))
+      transform!(df, names(df) => ByRow(prob) => names(df); renamecols=false)
+      tmp = Matrix(df) |> diag |> transpose |> Tables.table |> DataFrame
+      rename!(tmp, names(df))
+      tmp[!, "replicate"] .= k
+      cfmat = vcat(cfmat, tmp)
+    end
+
+    # Class-specific
+    for (k, class) in enumerate(classes)
+      results[class]["error"] = str_summarize_col(cfmat, class, 0.1, error_percent_formatter)
+      if projection == "L1RSVM"
+        results[class]["active"] = ""
+      else
+        G = maximum(gene_count)
+        most_stable = count(==(G), gene_count[:, k])
+        results[class]["active"] = string(integer_formatter(G), ", ", integer_formatter(most_stable))
+      end
+    end
+
+    r[projection] = results
+  end
+
+  io = IOBuffer()
+  ncolumns = length(projections)
+  nsubcols = 2
+  write(io, "\\begin{tabular}{c$(repeat("c", ncolumns*nsubcols))}\n")
+  write(io, "\\toprule\n")
+  col_label, col_rule = String[], String[]
+  for (k, projection) in enumerate(projections)
+    st = 2+nsubcols*(k-1)
+    sp = st+nsubcols-1
+    push!(col_label, "& \\multicolumn{$(nsubcols)}{c}{$(ABBREVIATIONS[projection])}")
+    push!(col_rule,  "    \\cmidrule(lr){$(st)-$(sp)}")
+  end
+  write(io, "    $(join(col_label, "")) \\\\\n")
+  write(io, "$(join(col_rule, ""))\n")
+  write(io, "    $(repeat("& Error (\\%) & \\# Active ", ncolumns))\\\\\n")
+  write(io, "\\midrule\n")
+
+  # Add overall results
+  write(io, "Total ")
+  for key in projections
+    write(io, """
+        & $(r[key]["total"]["error"])
+        & $(r[key]["total"]["active"])
+    """)
+  end
+  write(io, "\\\\\n")
+
+  # Add class-specific results
+  for class in classes
+    write(io, "$(class) ")
+    for key in projections
+      write(io, """
+          & $(r[key][class]["error"])
+          & $(r[key][class]["active"])
+      """)
+    end
+    write(io, "\\\\\n")
+  end
+
+  write(io, "\\bottomrule\n")
+  write(io, "\\end{tabular}")
+  tbl = String(take!(io))
+  close(io)
+  return tbl
+end
+
+function pam50_overlap(dir, projections, nreps)
+  global ABBREVIATIONS
+
+  # Gather gene names
+  reffile = joinpath(dirname(dir), "TCGA-BRCA-preprocessed_genes.csv")
+  genes = CSV.read(reffile, DataFrame)[!,:name]
+  pam50 = CSV.read(joinpath(dirname(dir), "PAM50.txt"), DataFrame; header=false)[!, 1]
+
+  df = DataFrame(method=String[], Basal=[], Her2=[], LumA=[], LumB=[], Normal=[])
+  for projection in projections
+    coeff = [MVDA.load_model(joinpath(dir, "BRCA", projection, "modelA", "$(k)")).coeff_proj.slope for k in 1:nreps]    
+    gene_count = zeros(Int, size(coeff[1]))
+    for i in axes(gene_count, 2)
+        eff = map(x -> vec(x[:, i]), coeff)
+        nz_row = map(find_nz, eff)
+        for arr in nz_row, j in arr
+          gene_count[j, i] += 1
+        end
+    end
+    x = String[]
+    for k in axes(gene_count, 2)
+      idx = findall(==(maximum(gene_count)), gene_count[:, k])     # most replicated genes
+      overlap = intersect(pam50, genes[idx])
+      if 1 <= length(overlap) <= 25
+        push!(x, "(+) " * join(overlap, ","))
+      elseif length(overlap) > 25
+        push!(x, "(-): " * join(setdiff(pam50, overlap), ","))
+      else
+        push!(x, "")
+      end
+    end
+    push!(df, (ABBREVIATIONS[projection], x...))
+  end
+  return df
 end
 
 ##### Execution of the script #####
@@ -756,10 +934,15 @@ function main(input, output)
     @info "Generating Table 4..."
     @time begin
         tbl4 = make_comparative_table_by_example(cancer_path,
-            (
+            [
                 "colon", "srbctA", "leukemiaA", "lymphomaA", "brain",
                 "prostate",
-            );
+            ],
+            [
+                "HomogeneousL0Projection",
+                "HeterogeneousL0Projection",
+                "HeterogeneousL1BallProjection",
+            ];
             alpha=0.1
         )
         save_table(joinpath(tables, "Table4.tex"), tbl4, nothing)
@@ -777,11 +960,17 @@ function main(input, output)
     @info "Generating Table 5..."
     @time begin
         tbl5 = make_comparative_table_by_example(uci_path,
-            (
+            [
                 "iris", "lymphography", "zoo", "bcw","waveform",
                 "splice", "letters", "optdigits", "vowel", "HAR",
                 "TCGA-HiSeq",
-            );
+            ],
+            [
+                "HomogeneousL0Projection",
+                "HeterogeneousL0Projection",
+                "HeterogeneousL1BallProjection",
+                "L1RSVM",
+            ];
             alpha=0.1
         )
         save_table(joinpath(tables, "Table5.tex"), tbl5, nothing)
@@ -795,17 +984,51 @@ function main(input, output)
         save(joinpath(figures, "Figure7.pdf"), fig7, pt_per_unit=1)
     end
 
-    # Section 3.4
+    # Section 4.4
     @info "Generating Table 6..."
     @time begin
         tbl6 = make_comparative_table_by_example(nonlinear_path,
-            (
+            [
                 "circles", "clouds", "waveform", "spiral", "spiral-hard",
                 "vowel",
-            );
+            ],
+            [
+                "HomogeneousL0Projection",
+                "HeterogeneousL0Projection",
+                "HeterogeneousL1BallProjection",
+            ];
             alpha=0.1
         )
         save_table(joinpath(tables, "Table6.tex"), tbl6, nothing)
+    end
+
+    @info "Generating Table 7..."
+    @time begin
+        tbl7 = detailed_results(uci_path, "BRCA",
+            [
+                "HomogeneousL0Projection",
+                "HeterogeneousL0Projection",
+                "HeterogeneousL1BallProjection",
+                "L1RSVM",
+            ],
+            10; # number of replicates
+            alpha=0.1
+        )
+        save_table(joinpath(tables, "Table7.tex"), tbl7, nothing)
+    end
+
+    @info "Generating Table 8..."
+    @time begin
+        tbl8 = detailed_results(uci_path, "TGP",
+            [
+                "HomogeneousL0Projection",
+                "HeterogeneousL0Projection",
+                "HeterogeneousL1BallProjection",
+            ],
+            10; # number of replicates
+            alpha=0.1
+        )
+        save_table(joinpath(tables, "Table8.tex"), tbl8, nothing)
     end
 
     # Appendix: Timing
@@ -831,7 +1054,7 @@ function main(input, output)
             [
                 "iris", "lymphography", "zoo", "bcw","waveform",
                 "splice", "letters", "optdigits", "vowel", "HAR",
-                "TCGA-HiSeq",
+                "TCGA-HiSeq", "BRCA", "TGP",
             ],
             [
                 "HomogeneousL0Projection",
@@ -840,6 +1063,19 @@ function main(input, output)
             ]
         )
         save_table(joinpath(tables, "TableC2.tex"), tblC2, nothing)
+    end
+
+    @info "Generating Appendix Table C3"
+    @time begin
+        tblC3 = pam50_overlap(uci_path,
+          [
+            "HomogeneousL0Projection",
+            "HeterogeneousL0Projection",
+            "HeterogeneousL1BallProjection",
+          ],
+          10 # number of replicates
+        )
+        save_table(joinpath(tables, "TableC3.tex"), tblC3, nothing)
     end
 
     return nothing

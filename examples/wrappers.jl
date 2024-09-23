@@ -6,7 +6,7 @@ library(MGSDA)
 
 import LIBSVM
 import LIBSVM: LinearSVC, Linearsolver
-import MVDA: accuracy
+import MVDA: accuracy, confusion_matrix
 
 abstract type AbstractWrapper end
 
@@ -186,6 +186,18 @@ function MVDA.accuracy(model::LinearSVC, (L, X))
     sum(LIBSVM.predict(model, X) .== L) / length(L)
 end
 
+function MVDA.confusion_matrix(model::LinearSVC, labels, (L, X))
+  Lhat = LIBSVM.predict(model, X)
+  d = Dict(label => i for (i, label) in enumerate(labels))
+  C = zeros(length(labels), length(labels))
+  for (lhat, l) in zip(Lhat, L)
+      # rows: true, cols: predicted
+      i, j = d[l], d[lhat]
+      C[i,j] += 1
+  end
+  return (C, d)
+end
+
 function fit_L1R_L2LOSS_SVC(L, X;
     tolerance::Float64=Inf,
     cost::Float64=1.0,
@@ -210,7 +222,6 @@ function cv_L1R_L2LOSS_SVC(L, X;
     verbose::Bool=false,
     Cvals=MVDA.make_log10_grid(-2, 2, 5),
     nfolds::Int=5,
-    seed::Int=1903,
     kwargs...
 )
     # helper function to create a model
@@ -219,7 +230,7 @@ function cv_L1R_L2LOSS_SVC(L, X;
         tolerance=tolerance,
         cost=C,
         bias=bias,
-        verbose=false
+        verbose=verbose
     )
     # Search C grid from smallest to largest
     sort!(Cvals, lt=isless, rev=false)
@@ -245,24 +256,34 @@ function cv_L1R_L2LOSS_SVC(L, X;
     return (; cost=best_cost)
 end
 
-function L1R_L2LOSS_SVC(L, X; is_class_specific::Bool=false, at::Float64=0.8, kwargs...)
+function L1R_L2LOSS_SVC(L, X; is_class_specific::Bool=false, at::Float64=0.8, data_transform=ZScoreTransform, kwargs...)
     # Split data into CV and test sets
     data = MLDataUtils.splitobs((L, X), at=at, obsdim=ObsDim.First())
+    labels = sort!(unique(L))
     L_cv, X_cv = MLDataUtils.getobs(data[1], ObsDim.First())
     L_ts, X_ts = MLDataUtils.getobs(data[2], ObsDim.First())
     @info "L1R_L2LOSS_SVC" n_train=length(L_cv) n_test=length(L_ts)
     # Run CV
     result_cv = @timed cv_L1R_L2LOSS_SVC(L_cv, X_cv; kwargs...)
     # Center and scale both datasets using only the training data
-    F = StatsBase.fit(ZScoreTransform, X_cv, dims=1)
+    F = StatsBase.fit(data_transform, X_cv, dims=1)
     MVDA.__adjust_transform__(F)
     foreach(Base.Fix1(StatsBase.transform!, F), (X_cv, X_ts))
     # Train the final model
     result_fit = @timed fit_L1R_L2LOSS_SVC(L_cv, X_cv;
         cost=result_cv.value.cost, kwargs...)
     model = result_fit.value
-    B = reshape(model.fit.w, model.fit.nr_class, model.fit.nr_feature) |>
-        transpose |> Matrix
+    p, c = model.fit.nr_feature, model.fit.nr_class
+    ncols = div(length(model.fit.w), model.fit.nr_class)
+    if ncols >= p
+      nr_w = p * c # c > 2
+      B = reshape(view(model.fit.w, 1:nr_w), c, p) |>
+      transpose |> Matrix
+    else
+      nr_w = p # c == 2
+      B = reshape(view(model.fit.w, 1:nr_w), 1, p) |>
+      transpose |> Matrix
+    end
     if is_class_specific
         idx = [findall(!=(0), b) for b in eachcol(B)]
     else
@@ -277,8 +298,8 @@ function L1R_L2LOSS_SVC(L, X; is_class_specific::Bool=false, at::Float64=0.8, kw
         ),
         fit=(
             time=result_fit.time,
-            train=(score=acc_tr,),
-            test=(score=acc_ts,),
+            train=(score=acc_tr, confusion_matrix=MVDA.confusion_matrix(model, labels, (L_cv, X_cv))),
+            test=(score=acc_ts, confusion_matrix=MVDA.confusion_matrix(model, labels, (L_ts, X_ts))),
             support=idx,
         ),
         reduced=(
